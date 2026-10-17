@@ -1,4 +1,3 @@
-
 """Core data models for MeshWeaver task execution."""
 
 from dataclasses import dataclass, field
@@ -38,9 +37,8 @@ class Task:
         if self.max_retries < 0:
             raise ValueError("max_retries cannot be negative")
 
-        if self.timeout_seconds is not None:
-            if self.timeout_seconds <= 0:
-                raise ValueError("timeout_seconds must be positive")
+        if self.timeout_seconds is not None and self.timeout_seconds <= 0:
+            raise ValueError("timeout_seconds must be positive")
 
 
 @dataclass
