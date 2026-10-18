@@ -1,7 +1,6 @@
-
 import unittest
 
-from net.messages import Message, PING, PONG
+from net.messages import PING, PONG, Message
 
 
 class TestMessage(unittest.TestCase):

@@ -1,4 +1,3 @@
-
 import unittest
 
 from net.peer_manager import PeerConnectionManager

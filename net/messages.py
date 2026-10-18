@@ -1,10 +1,8 @@
-
 """Standard message format for MeshWeaver."""
 
-from dataclasses import asdict, dataclass
 import json
 import time
-
+from dataclasses import asdict, dataclass
 
 # Message types used for peer communication
 PING = "PING"
