@@ -1,25 +1,19 @@
-
 import asyncio
 import unittest
 
-from net.messages import Message, PING, PONG
+from net.messages import PING, PONG, Message
 from net.udp_node import start_udp_node
 
 
 class TestUDPNode(unittest.IsolatedAsyncioTestCase):
 
     async def asyncSetUp(self):
-        self.transport_a, self.protocol_a = await start_udp_node(
-            node_id="node-a"
-        )
-        self.transport_b, self.protocol_b = await start_udp_node(
-            node_id="node-b"
-        )
+        self.transport_a, self.protocol_a = await start_udp_node(node_id="node-a")
+        self.transport_b, self.protocol_b = await start_udp_node(node_id="node-b")
 
     async def asyncTearDown(self):
         self.transport_a.close()
         self.transport_b.close()
-
         await asyncio.sleep(0)
 
     async def wait_for_condition(self, condition, timeout=2.0):
@@ -120,6 +114,35 @@ class TestUDPNode(unittest.IsolatedAsyncioTestCase):
         await asyncio.sleep(0.1)
 
         self.assertEqual(len(self.protocol_a.received_envelopes), 0)
+
+    async def test_structured_message_records_peer_activity(self):
+        address_b = self.transport_b.get_extra_info("sockname")
+
+        message = Message(
+            type="TEST",
+            sender_id="node-a",
+            seq=10,
+            payload={},
+        )
+
+        self.protocol_a.send_message(message, address_b)
+
+        await self.wait_for_condition(
+            lambda: "node-a" in self.protocol_b.peer_manager.peers
+        )
+
+        self.assertTrue(self.protocol_b.peer_manager.is_peer_alive("node-a"))
+
+    async def test_plain_text_does_not_register_structured_peer(self):
+        address_b = self.transport_b.get_extra_info("sockname")
+
+        self.protocol_a.send_message("Hello MeshWeaver", address_b)
+
+        await self.wait_for_condition(
+            lambda: len(self.protocol_b.received_messages) == 1
+        )
+
+        self.assertEqual(self.protocol_b.peer_manager.peers, {})
 
 
 if __name__ == "__main__":

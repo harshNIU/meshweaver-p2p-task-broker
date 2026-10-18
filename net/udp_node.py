@@ -1,35 +1,37 @@
-
 """Asynchronous UDP networking for MeshWeaver."""
 
 import asyncio
 import json
 
-from net.messages import Message, PING, PONG
+from net.messages import PING, PONG, Message
+from net.peer_manager import PeerConnectionManager
 
 
 class UDPProtocol(asyncio.DatagramProtocol):
-    """Receive UDP messages and respond to PING requests."""
+    """Receive UDP messages and track peer activity."""
 
-    def __init__(self, node_id="node"):
+    def __init__(self, node_id="node", peer_manager=None):
         self.transport = None
         self.node_id = node_id
 
-        # Keep plain-text messages compatible with the existing test.
         self.received_messages = []
-
-        # Store structured MeshWeaver messages separately.
         self.received_envelopes = []
+
+        # Use a supplied manager or create one for this node.
+        self.peer_manager = (
+            peer_manager if peer_manager is not None else PeerConnectionManager()
+        )
 
     def connection_made(self, transport):
         self.transport = transport
         print(f"UDP node {self.node_id} started")
 
     def datagram_received(self, data, addr):
-        # First, try to decode a structured MeshWeaver message.
+        # Try to decode a structured MeshWeaver message.
         try:
             message = Message.decode(data)
         except (UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError):
-            # Fall back to the plain-text behavior from Day 2.
+            # Preserve support for plain-text messages.
             message = data.decode("utf-8", errors="replace")
             self.received_messages.append((message, addr))
             print(f"Received {message!r} from {addr}")
@@ -37,6 +39,9 @@ class UDPProtocol(asyncio.DatagramProtocol):
 
         self.received_envelopes.append((message, addr))
         print(f"Received {message.type} from {message.sender_id}")
+
+        # Record activity for the sender of a structured message.
+        self.peer_manager.record_activity(message.sender_id)
 
         # Automatically reply to PING with PONG.
         if message.type == PING:
@@ -67,12 +72,20 @@ class UDPProtocol(asyncio.DatagramProtocol):
         self.transport.sendto(data, address)
 
 
-async def start_udp_node(host="127.0.0.1", port=0, node_id="node"):
+async def start_udp_node(
+    host="127.0.0.1",
+    port=0,
+    node_id="node",
+    peer_manager=None,
+):
     """Start a UDP node and return its transport and protocol."""
     loop = asyncio.get_running_loop()
 
     transport, protocol = await loop.create_datagram_endpoint(
-        lambda: UDPProtocol(node_id=node_id),
+        lambda: UDPProtocol(
+            node_id=node_id,
+            peer_manager=peer_manager,
+        ),
         local_addr=(host, port),
     )
 
