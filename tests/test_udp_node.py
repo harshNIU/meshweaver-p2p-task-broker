@@ -133,6 +133,20 @@ class TestUDPNode(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(self.protocol_b.peer_manager.is_peer_alive("node-a"))
 
+    async def test_cleanup_expired_peers(self):
+        """Remove expired peers while preserving active peers."""
+        manager = self.protocol_b.peer_manager
+        manager.timeout_seconds = 10
+
+        manager.record_activity("node-old", now=100)
+        manager.record_activity("node-active", now=105)
+
+        removed = self.protocol_b.cleanup_expired_peers(now=110)
+
+        self.assertEqual(removed, ["node-old"])
+        self.assertNotIn("node-old", manager.peers)
+        self.assertIn("node-active", manager.peers)
+
     async def test_plain_text_does_not_register_structured_peer(self):
         address_b = self.transport_b.get_extra_info("sockname")
 

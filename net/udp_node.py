@@ -59,6 +59,10 @@ class UDPProtocol(asyncio.DatagramProtocol):
     def connection_lost(self, exc):
         print(f"UDP node {self.node_id} stopped")
 
+    def cleanup_expired_peers(self, now=None):
+        """Remove peers that have exceeded their activity timeout."""
+        return self.peer_manager.remove_expired_peers(now=now)
+
     def send_message(self, message, address):
         """Send a plain-text or structured message over UDP."""
         if self.transport is None:
