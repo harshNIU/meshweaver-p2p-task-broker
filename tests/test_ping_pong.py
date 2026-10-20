@@ -1,20 +1,15 @@
-
 import asyncio
 import unittest
 
-from net.messages import Message, PING, PONG
+from net.messages import PING, PONG, Message
 from net.udp_node import start_udp_node
 
 
 class TestPingPong(unittest.IsolatedAsyncioTestCase):
 
     async def test_ping_receives_pong(self):
-        transport_a, protocol_a = await start_udp_node(
-            node_id="node-a"
-        )
-        transport_b, protocol_b = await start_udp_node(
-            node_id="node-b"
-        )
+        transport_a, protocol_a = await start_udp_node(node_id="node-a")
+        transport_b, protocol_b = await start_udp_node(node_id="node-b")
 
         try:
             address_b = transport_b.get_extra_info("sockname")
@@ -31,8 +26,7 @@ class TestPingPong(unittest.IsolatedAsyncioTestCase):
             # Wait for Node A to receive the PONG response.
             for _ in range(50):
                 if any(
-                    message.type == PONG
-                    for message, _ in protocol_a.received_envelopes
+                    message.type == PONG for message, _ in protocol_a.received_envelopes
                 ):
                     break
 
@@ -41,8 +35,7 @@ class TestPingPong(unittest.IsolatedAsyncioTestCase):
             # Confirm Node B received PING.
             self.assertTrue(
                 any(
-                    message.type == PING
-                    for message, _ in protocol_b.received_envelopes
+                    message.type == PING for message, _ in protocol_b.received_envelopes
                 )
             )
 
