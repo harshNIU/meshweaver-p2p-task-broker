@@ -6,7 +6,6 @@ from net.udp_node import start_udp_node
 
 
 class TestUDPNode(unittest.IsolatedAsyncioTestCase):
-
     async def asyncSetUp(self):
         self.transport_a, self.protocol_a = await start_udp_node(node_id="node-a")
         self.transport_b, self.protocol_b = await start_udp_node(node_id="node-b")
@@ -133,6 +132,20 @@ class TestUDPNode(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(self.protocol_b.peer_manager.is_peer_alive("node-a"))
 
+    async def test_cleanup_expired_peers(self):
+        """Remove expired peers while preserving active peers."""
+        manager = self.protocol_b.peer_manager
+        manager.timeout_seconds = 10
+
+        manager.record_activity("node-old", now=100)
+        manager.record_activity("node-active", now=105)
+
+        removed = self.protocol_b.cleanup_expired_peers(now=110)
+
+        self.assertEqual(removed, ["node-old"])
+        self.assertNotIn("node-old", manager.peers)
+        self.assertIn("node-active", manager.peers)
+
     async def test_plain_text_does_not_register_structured_peer(self):
         address_b = self.transport_b.get_extra_info("sockname")
 
@@ -143,6 +156,52 @@ class TestUDPNode(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(self.protocol_b.peer_manager.peers, {})
+
+    async def test_duplicate_structured_message_is_ignored(self):
+        address_b = self.transport_b.get_extra_info("sockname")
+
+        message = Message(
+            type="TEST",
+            sender_id="node-a",
+            seq=100,
+            payload={"text": "Hello"},
+        )
+
+        self.protocol_a.send_message(message, address_b)
+        self.protocol_a.send_message(message, address_b)
+
+        await self.wait_for_condition(
+            lambda: len(self.protocol_b.received_envelopes) == 1
+        )
+
+        await asyncio.sleep(0.1)
+
+        self.assertEqual(len(self.protocol_b.received_envelopes), 1)
+
+    async def test_same_sequence_from_different_senders_is_accepted(self):
+        address_b = self.transport_b.get_extra_info("sockname")
+
+        message_a = Message(
+            type="TEST",
+            sender_id="node-a",
+            seq=5,
+            payload={},
+        )
+        message_c = Message(
+            type="TEST",
+            sender_id="node-c",
+            seq=5,
+            payload={},
+        )
+
+        self.protocol_a.send_message(message_a, address_b)
+        self.protocol_a.send_message(message_c, address_b)
+
+        await self.wait_for_condition(
+            lambda: len(self.protocol_b.received_envelopes) == 2
+        )
+
+        self.assertEqual(len(self.protocol_b.received_envelopes), 2)
 
 
 if __name__ == "__main__":
