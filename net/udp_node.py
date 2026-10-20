@@ -17,6 +17,10 @@ class UDPProtocol(asyncio.DatagramProtocol):
         self.received_messages = []
         self.received_envelopes = []
 
+        # Track structured messages already received.
+        # Each key is (sender_id, sequence_number).
+        self.seen_messages = set()
+
         # Use a supplied manager or create one for this node.
         self.peer_manager = (
             peer_manager if peer_manager is not None else PeerConnectionManager()
@@ -27,17 +31,38 @@ class UDPProtocol(asyncio.DatagramProtocol):
         print(f"UDP node {self.node_id} started")
 
     def datagram_received(self, data, addr):
+        """Handle an incoming plain-text or structured UDP message."""
+
         # Try to decode a structured MeshWeaver message.
         try:
             message = Message.decode(data)
-        except (UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError):
+        except (
+            UnicodeDecodeError,
+            json.JSONDecodeError,
+            TypeError,
+            ValueError,
+        ):
             # Preserve support for plain-text messages.
-            message = data.decode("utf-8", errors="replace")
-            self.received_messages.append((message, addr))
-            print(f"Received {message!r} from {addr}")
+            text_message = data.decode("utf-8", errors="replace")
+            self.received_messages.append((text_message, addr))
+            print(f"Received {text_message!r} from {addr}")
             return
 
+        # Identify structured messages by sender and sequence number.
+        message_key = (message.sender_id, message.seq)
+
+        # Ignore duplicates before recording activity or replying.
+        if message_key in self.seen_messages:
+            print(
+                f"Ignoring duplicate message from "
+                f"{message.sender_id}, seq={message.seq}"
+            )
+            return
+
+        # Remember this message and record it once.
+        self.seen_messages.add(message_key)
         self.received_envelopes.append((message, addr))
+
         print(f"Received {message.type} from {message.sender_id}")
 
         # Record activity for the sender of a structured message.
@@ -54,9 +79,11 @@ class UDPProtocol(asyncio.DatagramProtocol):
             self.send_message(reply, addr)
 
     def error_received(self, exc):
+        """Report UDP transport errors."""
         print(f"UDP error: {exc}")
 
     def connection_lost(self, exc):
+        """Report when the UDP transport closes."""
         print(f"UDP node {self.node_id} stopped")
 
     def cleanup_expired_peers(self, now=None):
