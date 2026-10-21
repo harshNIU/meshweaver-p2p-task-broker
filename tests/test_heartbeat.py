@@ -42,3 +42,31 @@ def test_record_heartbeat_restores_alive_state():
 
     assert node.state == "ALIVE"
     assert monitor.check_nodes()["node-1"] == "ALIVE"
+
+
+def test_unknown_node_heartbeat_is_ignored():
+    monitor = HeartbeatMonitor({})
+
+    monitor.record_heartbeat("unknown-node")
+
+    assert "unknown-node" not in monitor.nodes
+
+
+def test_dead_node_stays_dead_without_heartbeat():
+    node = make_node("node-1", time.time() - 11)
+    monitor = HeartbeatMonitor({"node-1": node})
+
+    monitor.check_nodes()
+
+    assert node.state == "DEAD"
+
+
+def test_heartbeat_updates_last_seen():
+    node = make_node("node-1", time.time() - 11)
+    monitor = HeartbeatMonitor({"node-1": node})
+
+    previous_time = node.last_seen
+    monitor.record_heartbeat("node-1")
+
+    assert node.last_seen >= previous_time
+    assert node.state == "ALIVE"
