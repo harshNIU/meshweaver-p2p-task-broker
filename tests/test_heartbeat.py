@@ -5,6 +5,7 @@ from gossip.state import NodeInfo
 
 
 def make_node(node_id: str, last_seen: float) -> NodeInfo:
+    """Create a node for heartbeat testing."""
     return NodeInfo(
         node_id=node_id,
         host="127.0.0.1",
@@ -14,6 +15,7 @@ def make_node(node_id: str, last_seen: float) -> NodeInfo:
 
 
 def test_heartbeat_marks_node_alive():
+    """A recently responding node should remain alive."""
     node = make_node("node-1", time.time())
     monitor = HeartbeatMonitor({"node-1": node})
 
@@ -21,23 +23,35 @@ def test_heartbeat_marks_node_alive():
 
 
 def test_heartbeat_marks_node_suspect():
+    """A node missing recent heartbeats should become suspect."""
     node = make_node("node-1", time.time() - 7)
-    monitor = HeartbeatMonitor({"node-1": node})
+    monitor = HeartbeatMonitor(
+        {"node-1": node},
+        suspect_after=6.0,
+        dead_after=10.0,
+    )
 
     assert monitor.check_nodes()["node-1"] == "SUSPECT"
 
 
 def test_heartbeat_marks_node_dead():
+    """A node missing heartbeats beyond the threshold is dead."""
     node = make_node("node-1", time.time() - 11)
-    monitor = HeartbeatMonitor({"node-1": node})
+    monitor = HeartbeatMonitor(
+        {"node-1": node},
+        suspect_after=6.0,
+        dead_after=10.0,
+    )
 
     assert monitor.check_nodes()["node-1"] == "DEAD"
 
 
 def test_record_heartbeat_restores_alive_state():
-    node = make_node("node-1", time.time() - 11)
-    monitor = HeartbeatMonitor({"node-1": node})
+    """Receiving a heartbeat restores the node to alive."""
+    node = make_node("node-1", time.time() - 20)
+    node.state = "DEAD"
 
+    monitor = HeartbeatMonitor({"node-1": node})
     monitor.record_heartbeat("node-1")
 
     assert node.state == "ALIVE"
@@ -45,6 +59,7 @@ def test_record_heartbeat_restores_alive_state():
 
 
 def test_unknown_node_heartbeat_is_ignored():
+    """An unknown node must not be added automatically."""
     monitor = HeartbeatMonitor({})
 
     monitor.record_heartbeat("unknown-node")
@@ -53,20 +68,24 @@ def test_unknown_node_heartbeat_is_ignored():
 
 
 def test_dead_node_stays_dead_without_heartbeat():
-    node = make_node("node-1", time.time() - 11)
-    monitor = HeartbeatMonitor({"node-1": node})
+    """A node remains dead while no new heartbeat arrives."""
+    node = make_node("node-1", time.time() - 20)
+    monitor = HeartbeatMonitor(
+        {"node-1": node},
+        suspect_after=6.0,
+        dead_after=10.0,
+    )
 
-    monitor.check_nodes()
-
-    assert node.state == "DEAD"
+    assert monitor.check_nodes()["node-1"] == "DEAD"
+    assert monitor.check_nodes()["node-1"] == "DEAD"
 
 
 def test_heartbeat_updates_last_seen():
-    node = make_node("node-1", time.time() - 11)
+    """A heartbeat updates the last-seen timestamp."""
+    node = make_node("node-1", 1.0)
     monitor = HeartbeatMonitor({"node-1": node})
 
-    previous_time = node.last_seen
     monitor.record_heartbeat("node-1")
 
-    assert node.last_seen >= previous_time
+    assert node.last_seen > 1.0
     assert node.state == "ALIVE"
