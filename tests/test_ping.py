@@ -6,7 +6,6 @@ from net.udp_node import start_udp_node
 
 
 class TestPingIntegration(unittest.IsolatedAsyncioTestCase):
-
     async def test_two_nodes_ping_each_other(self):
         transport_a, protocol_a = await start_udp_node(node_id="node-a")
         transport_b, protocol_b = await start_udp_node(node_id="node-b")

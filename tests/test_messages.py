@@ -4,7 +4,6 @@ from net.messages import PING, PONG, Message
 
 
 class TestMessage(unittest.TestCase):
-
     def test_ping_message_round_trip(self):
         original = Message(
             type=PING,
