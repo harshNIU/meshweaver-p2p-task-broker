@@ -33,19 +33,28 @@ async def handle_client(
     writer: asyncio.StreamWriter,
     received_messages: list[Message],
 ) -> None:
-    """Receive messages from one connected TCP client."""
+    """Receive multiple messages from one connected TCP client."""
     try:
-        message = await read_message(reader)
-        received_messages.append(message)
+        while True:
+            try:
+                message = await read_message(reader)
+            except EOFError:
+                break
 
-        response = Message(
-            type="ACK",
-            sender_id="tcp-server",
-            seq=message.seq,
-            payload={"received": True, "original_type": message.type},
-        )
-        await send_message(writer, response)
-    except (EOFError, ValueError, ConnectionError):
+            received_messages.append(message)
+
+            response = Message(
+                type="ACK",
+                sender_id="tcp-server",
+                seq=message.seq,
+                payload={
+                    "received": True,
+                    "original_type": message.type,
+                },
+            )
+            await send_message(writer, response)
+
+    except (ValueError, ConnectionError):
         pass
     finally:
         writer.close()

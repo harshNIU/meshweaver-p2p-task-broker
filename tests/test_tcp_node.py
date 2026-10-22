@@ -1,7 +1,12 @@
+import asyncio
 import unittest
 
 from net.messages import Message
-from net.tcp_node import send_tcp_message, start_tcp_server
+from net.tcp_node import (
+    read_message,
+    send_tcp_message,
+    start_tcp_server,
+)
 
 
 class TestTCPNode(unittest.IsolatedAsyncioTestCase):
@@ -46,6 +51,52 @@ class TestTCPNode(unittest.IsolatedAsyncioTestCase):
             self.received_messages[0].payload,
             {"status": "success", "result": 42},
         )
+
+    async def test_multiple_messages_on_one_connection(self):
+        reader, writer = await asyncio.open_connection(self.host, self.port)
+
+        messages = [
+            Message(
+                type="TASK",
+                sender_id="node-1",
+                seq=10,
+                payload={"task": "first"},
+            ),
+            Message(
+                type="RESULT",
+                sender_id="node-1",
+                seq=11,
+                payload={"result": "second"},
+            ),
+        ]
+
+        try:
+            # Send both messages over the same TCP connection.
+            for message in messages:
+                writer.write(message.encode() + b"\n")
+
+            await writer.drain()
+
+            # Read the ACK for each message.
+            responses = [
+                await read_message(reader),
+                await read_message(reader),
+            ]
+
+            self.assertEqual(
+                [response.seq for response in responses],
+                [10, 11],
+            )
+
+            self.assertTrue(all(response.payload["received"] for response in responses))
+
+            self.assertEqual(
+                [message.seq for message in self.received_messages],
+                [10, 11],
+            )
+        finally:
+            writer.close()
+            await writer.wait_closed()
 
 
 if __name__ == "__main__":
