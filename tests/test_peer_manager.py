@@ -1,11 +1,9 @@
-
 import unittest
 
 from net.peer_manager import PeerConnectionManager
 
 
 class TestPeerConnectionManager(unittest.TestCase):
-
     def test_peer_is_alive_before_timeout(self):
         manager = PeerConnectionManager(timeout_seconds=10)
         manager.record_activity("node-b", now=100)

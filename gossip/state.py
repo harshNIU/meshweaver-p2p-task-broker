@@ -1,7 +1,6 @@
 from dataclasses import dataclass
 from typing import Literal
 
-
 NodeState = Literal["ALIVE", "SUSPECT", "DEAD"]
 
 
@@ -16,4 +15,3 @@ class NodeInfo:
     ram: float = 0.0
     last_seen: float = 0.0
     state: NodeState = "ALIVE"
-    
