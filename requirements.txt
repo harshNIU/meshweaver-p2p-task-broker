@@ -1,8 +1,7 @@
-Set-Content -Path requirements.txt -Encoding utf8 -Value @(
-    "typer==0.27.3"
-    "rich==13.9.4"
-    "pytest==8.3.3"
-    "black==26.10.1"
-    "ruff==0.17.0"
-    "psutil"
-)
+typer==0.16.1
+click==8.4.2
+rich==13.9.4
+pytest==8.3.3
+black==26.10.1
+ruff==0.17.0
+psutil

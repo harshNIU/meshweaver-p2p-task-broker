@@ -30,9 +30,11 @@ def test_task_defaults_are_valid():
 def test_task_rejects_invalid_names_and_ids(field, value):
     with pytest.raises(ValueError):
         Task(
-            **{field: value, "task_name": "example"}
-            if field == "task_id"
-            else {field: value}
+            **(
+                {field: value, "task_name": "example"}
+                if field == "task_id"
+                else {field: value}
+            )
         )
 
 
