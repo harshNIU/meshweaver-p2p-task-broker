@@ -59,15 +59,15 @@ def test_task_rejects_invalid_timeout_values(value):
 
 
 def test_task_rejects_invalid_argument_containers():
-    with pytest.raises(ValueError, match="args"):
+    with pytest.raises(TypeError, match="args"):
         Task(task_name="example", args=[1, 2])
 
-    with pytest.raises(ValueError, match="kwargs"):
+    with pytest.raises(TypeError, match="kwargs"):
         Task(task_name="example", kwargs=[("value", 1)])
 
 
 def test_task_rejects_non_string_keyword_names():
-    with pytest.raises(ValueError, match="kwargs keys"):
+    with pytest.raises(TypeError, match="kwargs keys"):
         Task(task_name="example", kwargs={1: "value"})
 
 

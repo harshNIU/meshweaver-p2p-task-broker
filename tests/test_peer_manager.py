@@ -1,11 +1,9 @@
-
 import unittest
 
 from net.peer_manager import PeerConnectionManager
 
 
 class TestPeerConnectionManager(unittest.TestCase):
-
     def test_peer_is_alive_before_timeout(self):
         manager = PeerConnectionManager(timeout_seconds=10)
         manager.record_activity("node-b", now=100)
@@ -20,6 +18,12 @@ class TestPeerConnectionManager(unittest.TestCase):
 
         self.assertEqual(expired, ["node-b"])
 
+    def test_peer_is_alive_exactly_before_timeout(self):
+        manager = PeerConnectionManager(timeout_seconds=10)
+        manager.record_activity("node-b", now=100)
+
+        self.assertTrue(manager.is_peer_alive("node-b", now=109.9))
+
     def test_expired_peer_can_be_removed(self):
         manager = PeerConnectionManager(timeout_seconds=10)
         manager.record_activity("node-b", now=100)
@@ -28,6 +32,7 @@ class TestPeerConnectionManager(unittest.TestCase):
 
         self.assertEqual(removed, ["node-b"])
         self.assertFalse(manager.is_peer_alive("node-b", now=110))
+        self.assertEqual(manager.peers, {})
 
     def test_unknown_peer_is_not_alive(self):
         manager = PeerConnectionManager(timeout_seconds=10)
@@ -40,6 +45,23 @@ class TestPeerConnectionManager(unittest.TestCase):
         manager.record_activity("node-b", now=108)
 
         self.assertTrue(manager.is_peer_alive("node-b", now=115))
+
+    def test_multiple_peers_expire_independently(self):
+        manager = PeerConnectionManager(timeout_seconds=10)
+        manager.record_activity("node-a", now=100)
+        manager.record_activity("node-b", now=105)
+
+        expired = manager.get_expired_peers(now=111)
+
+        self.assertEqual(expired, ["node-a"])
+
+    def test_invalid_zero_timeout(self):
+        with self.assertRaises(ValueError):
+            PeerConnectionManager(timeout_seconds=0)
+
+    def test_invalid_negative_timeout(self):
+        with self.assertRaises(ValueError):
+            PeerConnectionManager(timeout_seconds=-1)
 
 
 if __name__ == "__main__":
