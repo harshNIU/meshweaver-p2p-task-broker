@@ -1,5 +1,6 @@
 """Core data models for MeshWeaver task execution."""
 
+import math
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
@@ -28,17 +29,36 @@ class Task:
     timeout_seconds: float | None = None
 
     def __post_init__(self) -> None:
-        if not self.task_name.strip():
-            raise ValueError("task_name cannot be empty")
+        if not isinstance(self.task_name, str) or not self.task_name.strip():
+            raise ValueError("task_name must be a non-empty string")
 
-        if not self.task_id.strip():
-            raise ValueError("task_id cannot be empty")
+        if not isinstance(self.task_id, str) or not self.task_id.strip():
+            raise ValueError("task_id must be a non-empty string")
 
-        if self.max_retries < 0:
-            raise ValueError("max_retries cannot be negative")
+        if not isinstance(self.args, tuple):
+            raise ValueError("args must be a tuple")
 
-        if self.timeout_seconds is not None and self.timeout_seconds <= 0:
-            raise ValueError("timeout_seconds must be positive")
+        if not isinstance(self.kwargs, dict):
+            raise ValueError("kwargs must be a dictionary")
+
+        if not all(isinstance(key, str) for key in self.kwargs):
+            raise ValueError("kwargs keys must be strings")
+
+        if (
+            isinstance(self.max_retries, bool)
+            or not isinstance(self.max_retries, int)
+            or self.max_retries < 0
+        ):
+            raise ValueError("max_retries must be a non-negative integer")
+
+        if self.timeout_seconds is not None:
+            if (
+                isinstance(self.timeout_seconds, bool)
+                or not isinstance(self.timeout_seconds, (int, float))
+                or not math.isfinite(self.timeout_seconds)
+                or self.timeout_seconds <= 0
+            ):
+                raise ValueError("timeout_seconds must be a finite positive number")
 
 
 @dataclass
