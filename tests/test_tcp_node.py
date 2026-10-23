@@ -98,6 +98,50 @@ class TestTCPNode(unittest.IsolatedAsyncioTestCase):
             writer.close()
             await writer.wait_closed()
 
+    async def test_invalid_json_message_is_rejected(self):
+        reader = asyncio.StreamReader()
+        reader.feed_data(b"{invalid json}\n")
+        reader.feed_eof()
+
+        with self.assertRaises(ValueError):
+            await read_message(reader)
+
+    async def test_connection_closed_before_message(self):
+        reader = asyncio.StreamReader()
+        reader.feed_eof()
+
+        with self.assertRaises(EOFError):
+            await read_message(reader)
+
+    async def test_server_accepts_valid_client_after_invalid_message(self):
+        reader, writer = await asyncio.open_connection(self.host, self.port)
+
+        try:
+            # Send invalid JSON to the server.
+            writer.write(b"{invalid json}\n")
+            await writer.drain()
+
+            # The server should close the faulty client's connection.
+            response = await asyncio.wait_for(reader.read(), timeout=2)
+            self.assertEqual(response, b"")
+        finally:
+            writer.close()
+            await writer.wait_closed()
+
+        # Check that the server still accepts a valid client.
+        message = Message(
+            type="TASK",
+            sender_id="node-after-error",
+            seq=99,
+            payload={"task": "check_server"},
+        )
+
+        response = await send_tcp_message(self.host, self.port, message)
+
+        self.assertEqual(response.type, "ACK")
+        self.assertEqual(response.seq, 99)
+        self.assertTrue(response.payload["received"])
+
 
 if __name__ == "__main__":
     unittest.main()
