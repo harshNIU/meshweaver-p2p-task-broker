@@ -142,6 +142,31 @@ class TestTCPNode(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.seq, 99)
         self.assertTrue(response.payload["received"])
 
+    async def test_ack_contains_original_message_details(self):
+        message = Message(
+            type="RESULT",
+            sender_id="node-ack-test",
+            seq=123,
+            payload={"result": "completed"},
+        )
+
+        response = await send_tcp_message(
+            self.host,
+            self.port,
+            message,
+        )
+
+        self.assertEqual(response.type, "ACK")
+        self.assertEqual(response.sender_id, "tcp-server")
+        self.assertEqual(response.seq, 123)
+        self.assertEqual(
+            response.payload,
+            {
+                "received": True,
+                "original_type": "RESULT",
+            },
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
