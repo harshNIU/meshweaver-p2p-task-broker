@@ -1,6 +1,7 @@
 """Unit and real-socket coverage for Member 2's Kademlia implementation."""
 
 import asyncio
+import time
 import unittest
 from unittest.mock import AsyncMock, patch
 
@@ -199,7 +200,7 @@ class DHTNetwork(unittest.IsolatedAsyncioTestCase):
     async def test_stale_bucket_refresh_queries_target_in_bucket(self):
         a, b = await self.node(0), await self.node(4)
         a.routing.add(b.contact)
-        a.routing.updated[2] = 0
+        a.routing.updated[2] = time.monotonic() - a.refresh_interval - 1
         with patch.object(a, "lookup", new_callable=AsyncMock) as lookup:
             await a.refresh()
             targets = [call.args[0] for call in lookup.call_args_list]
