@@ -7,6 +7,8 @@ from dataclasses import asdict, dataclass
 # Message types used for peer communication
 PING = "PING"
 PONG = "PONG"
+TASK_REQUEST = "TASK_REQUEST"
+TASK_RESULT = "TASK_RESULT"
 
 
 @dataclass
