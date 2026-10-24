@@ -9,13 +9,24 @@ from execution.models import TaskStatus
 from execution.serializer import TaskSerializationError, deserialize_task
 from net.messages import TASK_REQUEST, TASK_RESULT, Message
 
+# Maximum size of a newline-delimited TCP message, including its newline.
+MAX_MESSAGE_SIZE = 64 * 1024
+
 
 async def read_message(reader: asyncio.StreamReader) -> Message:
     """Read one newline-delimited JSON message from a TCP stream."""
-    raw = await reader.readline()
+    try:
+        raw = await reader.readline()
+    except ValueError as exc:
+        raise ValueError(
+            f"TCP message exceeds the {MAX_MESSAGE_SIZE}-byte limit."
+        ) from exc
 
     if not raw:
         raise EOFError("TCP connection closed before a message was received")
+
+    if len(raw) > MAX_MESSAGE_SIZE:
+        raise ValueError(f"TCP message exceeds the {MAX_MESSAGE_SIZE}-byte limit.")
 
     try:
         return Message.decode(raw.rstrip(b"\r\n"))
@@ -28,7 +39,11 @@ async def send_message(
     message: Message,
 ) -> None:
     """Send one message over a TCP stream."""
-    writer.write(message.encode() + b"\n")
+    encoded = message.encode()
+    if len(encoded) + 1 > MAX_MESSAGE_SIZE:
+        raise ValueError(f"TCP message exceeds the {MAX_MESSAGE_SIZE}-byte limit.")
+
+    writer.write(encoded + b"\n")
     await writer.drain()
 
 
@@ -158,6 +173,7 @@ async def handle_client(
             await send_message(writer, response)
 
     except (ValueError, ConnectionError):
+        # Reject malformed or oversized messages by closing that connection.
         pass
     finally:
         writer.close()
@@ -186,7 +202,12 @@ async def start_tcp_server(
             execution_engine=execution_engine,
         )
 
-    server = await asyncio.start_server(client_connected, host, port)
+    server = await asyncio.start_server(
+        client_connected,
+        host,
+        port,
+        limit=MAX_MESSAGE_SIZE,
+    )
     return server, received_messages
 
 
@@ -196,7 +217,11 @@ async def send_tcp_message(
     message: Message,
 ) -> Message:
     """Connect to a TCP server, send one message, and return its response."""
-    reader, writer = await asyncio.open_connection(host, port)
+    reader, writer = await asyncio.open_connection(
+        host,
+        port,
+        limit=MAX_MESSAGE_SIZE,
+    )
 
     try:
         await send_message(writer, message)
