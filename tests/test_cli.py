@@ -45,7 +45,34 @@ def test_start_rejects_invalid_port():
 
 
 def test_submit_command():
-    result = runner.invoke(app, ["submit"])
+    result = runner.invoke(
+        app,
+        [
+            "submit",
+            "add",
+            "--args",
+            "[2, 3]",
+            "--kwargs",
+            '{"round": true}',
+        ],
+    )
 
     assert result.exit_code == 0
-    assert "Submit command is not implemented yet." in result.stdout
+    assert "Task request created successfully." in result.stdout
+    assert "Task name: add" in result.stdout
+    assert '"args": [2, 3]' in result.stdout
+    assert "Remote execution is not implemented yet" in result.stdout
+
+
+def test_submit_rejects_non_array_args():
+    result = runner.invoke(app, ["submit", "add", "--args", '{"x": 1}'])
+
+    assert result.exit_code == 1
+    assert "--args must be a JSON array" in result.stdout
+
+
+def test_submit_rejects_non_object_kwargs():
+    result = runner.invoke(app, ["submit", "add", "--kwargs", "[1, 2]"])
+
+    assert result.exit_code == 1
+    assert "--kwargs must be a JSON object" in result.stdout
