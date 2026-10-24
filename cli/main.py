@@ -10,7 +10,8 @@ from rich.console import Console
 
 from execution.models import Task
 from execution.serializer import TaskSerializationError, serialize_task
-from net.messages import TASK_REQUEST, TASK_RESULT, Message
+from net.bootstrap import SeedAddress, parse_seed_address, request_peer_list
+from net.messages import PEER_LIST, TASK_REQUEST, TASK_RESULT, Message
 from net.udp_node import start_udp_node
 
 app = typer.Typer(help="MeshWeaver peer-to-peer task broker CLI")
@@ -37,6 +38,57 @@ async def wait_for_task_result(protocol, seq, task_id, timeout):
     raise TimeoutError
 
 
+def select_seed_destination(protocol, seed: SeedAddress):
+    """Select a discovered peer, preferring peers other than the seed."""
+    registry = getattr(protocol, "node_registry", {})
+    if not isinstance(registry, dict):
+        raise TypeError("The node registry must be a dictionary.")
+
+    seed_node_id = None
+    client_node_id = getattr(protocol, "node_id", None)
+
+    for message, address in protocol.received_envelopes:
+        if (
+            message.type == PEER_LIST
+            and isinstance(address, tuple)
+            and len(address) >= 2
+            and address[1] == seed.port
+        ):
+            seed_node_id = message.sender_id
+            break
+
+    candidates = []
+    seed_candidate = None
+
+    for node in registry.values():
+        node_id = getattr(node, "node_id", None)
+        if not node_id or node_id == client_node_id:
+            continue
+
+        if getattr(node, "state", "ALIVE") != "ALIVE":
+            continue
+
+        candidate = (node.host, node.port)
+
+        if node_id == seed_node_id or (
+            node.host == seed.host and node.port == seed.port
+        ):
+            seed_candidate = candidate
+        else:
+            candidates.append(candidate)
+
+    if candidates:
+        return candidates[0]
+
+    if seed_candidate is not None:
+        return seed_candidate
+
+    raise RuntimeError(
+        "The seed did not advertise any eligible peers. "
+        "Make sure a worker node is running and has registered with the seed."
+    )
+
+
 @app.command()
 def start(
     port: int = typer.Option(
@@ -49,11 +101,22 @@ def start(
         "--demo-tasks",
         help="Register the built-in add and multiply demonstration tasks.",
     ),
+    seed: str | None = typer.Option(
+        None,
+        "--seed",
+        help="Register this node with a seed address, such as 127.0.0.1:8000.",
+    ),
 ):
-    """Start a MeshWeaver node."""
+    """Start a MeshWeaver node, optionally registering with a seed."""
     if not 1 <= port <= 65535:
         console.print("[red]Error: port must be between 1 and 65535.[/red]")
         raise typer.Exit(code=1)
+
+    try:
+        seed_address = parse_seed_address(seed) if seed else None
+    except (TypeError, ValueError) as exc:
+        console.print(f"[red]Invalid seed address: {exc}[/red]")
+        raise typer.Exit(code=1) from exc
 
     async def run_node():
         transport = None
@@ -69,16 +132,32 @@ def start(
                 register_builtin_tasks(engine)
                 console.print("[green]Registered demo tasks: add, multiply[/green]")
 
-            transport, _protocol = await start_udp_node(
+            node_id = f"node-{port}"
+            transport, protocol = await start_udp_node(
                 host="127.0.0.1",
                 port=port,
-                node_id=f"node-{port}",
+                node_id=node_id,
                 execution_engine=engine,
             )
 
-            console.print(
-                f"[green]MeshWeaver node running on " f"127.0.0.1:{port}[/green]"
-            )
+            if seed_address is not None:
+                joined = await request_peer_list(
+                    protocol=protocol,
+                    node_id=node_id,
+                    seed=seed_address,
+                    timeout=2.0,
+                )
+                if not joined:
+                    raise RuntimeError(
+                        f"Could not discover peers through seed "
+                        f"{seed_address.host}:{seed_address.port}."
+                    )
+                console.print(
+                    f"[green]Registered with seed "
+                    f"{seed_address.host}:{seed_address.port}[/green]"
+                )
+
+            console.print(f"[green]MeshWeaver node running on 127.0.0.1:{port}[/green]")
             console.print("Press Ctrl+C to stop the node.")
 
             await asyncio.Event().wait()
@@ -91,6 +170,9 @@ def start(
         asyncio.run(run_node())
     except KeyboardInterrupt:
         console.print("\n[yellow]MeshWeaver node stopped.[/yellow]")
+    except RuntimeError as exc:
+        console.print(f"[red]Could not start node: {exc}[/red]")
+        raise typer.Exit(code=1) from exc
 
 
 @app.command()
@@ -112,20 +194,25 @@ def submit(
     host: str = typer.Option(
         "127.0.0.1",
         "--host",
-        help="Destination node host.",
+        help="Destination node host for direct submission.",
     ),
     port: int = typer.Option(
         8000,
         "--port",
-        help="Destination node UDP port.",
+        help="Destination node UDP port for direct submission.",
     ),
     timeout: float = typer.Option(
         5.0,
         "--timeout",
         help="Seconds to wait for a task result.",
     ),
+    seed: str | None = typer.Option(
+        None,
+        "--seed",
+        help="Discover a destination through a seed address, such as 127.0.0.1:8000.",
+    ),
 ):
-    """Submit a task to a remote MeshWeaver UDP node."""
+    """Submit a task directly or through a discovered peer."""
     try:
         args = json.loads(args_json)
         kwargs = json.loads(kwargs_json)
@@ -145,12 +232,13 @@ def submit(
         if not math.isfinite(timeout) or timeout <= 0:
             raise ValueError("--timeout must be a finite positive number.")
 
+        seed_address = parse_seed_address(seed) if seed else None
+
         task = Task(
             task_name=task_name,
             args=tuple(args),
             kwargs=kwargs,
         )
-
         task_data = json.loads(serialize_task(task))
 
     except (
@@ -166,7 +254,6 @@ def submit(
         transport = None
 
         try:
-            # Use a unique sender ID for each CLI invocation.
             sender_id = f"cli-{uuid4()}"
             seq = 1
 
@@ -176,26 +263,43 @@ def submit(
                 node_id=sender_id,
             )
 
+            if seed_address is not None:
+                joined = await request_peer_list(
+                    protocol=protocol,
+                    node_id=sender_id,
+                    seed=seed_address,
+                    timeout=2.0,
+                )
+                if not joined:
+                    raise TimeoutError(
+                        f"Could not discover peers through seed "
+                        f"{seed_address.host}:{seed_address.port}"
+                    )
+
+                destination = select_seed_destination(protocol, seed_address)
+            else:
+                destination = (host, port)
+
             request = Message(
                 type=TASK_REQUEST,
                 sender_id=sender_id,
                 seq=seq,
                 payload={"task": task_data},
             )
+            protocol.send_message(request, destination)
 
-            protocol.send_message(request, (host, port))
-
-            console.print(f"Submitted task '{task.task_name}' " f"to {host}:{port}")
+            console.print(
+                f"Submitted task '{task.task_name}' "
+                f"to {destination[0]}:{destination[1]}"
+            )
             console.print(f"Task ID: {task.task_id}")
 
-            result = await wait_for_task_result(
+            return await wait_for_task_result(
                 protocol=protocol,
                 seq=seq,
                 task_id=task.task_id,
                 timeout=timeout,
             )
-
-            return result
 
         finally:
             if transport is not None:
@@ -205,10 +309,15 @@ def submit(
         result = asyncio.run(send_task())
 
     except TimeoutError as exc:
+        if seed_address is not None:
+            target = f"seed {seed_address.host}:{seed_address.port}"
+        else:
+            target = f"{host}:{port}"
+
         console.print(
-            f"[red]Timed out after {timeout:g} seconds waiting for "
-            f"task result. Check that the destination node is running "
-            f"and reachable at {host}:{port}.[/red]"
+            f"[red]Timed out after {timeout:g} seconds. "
+            f"Check that the destination is running and reachable "
+            f"through {target}.[/red]"
         )
         raise typer.Exit(code=1) from exc
 
@@ -225,11 +334,9 @@ def submit(
 
     if status == "completed":
         console.print(f"Result: {result.get('value')}")
-        console.print(
-            f"Duration: " f"{result.get('duration_seconds', 0.0):.6f} seconds"
-        )
+        console.print(f"Duration: {result.get('duration_seconds', 0.0):.6f} seconds")
     else:
-        console.print(f"Error: " f"{result.get('error') or 'Unknown execution error'}")
+        console.print(f"Error: {result.get('error') or 'Unknown execution error'}")
 
     if status != "completed":
         raise typer.Exit(code=1)
