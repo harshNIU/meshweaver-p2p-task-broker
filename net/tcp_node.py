@@ -6,10 +6,7 @@ from typing import Any
 
 from execution.engine import ExecutionEngine
 from execution.models import TaskStatus
-from execution.serializer import (
-    TaskSerializationError,
-    deserialize_task,
-)
+from execution.serializer import TaskSerializationError, deserialize_task
 from net.messages import TASK_REQUEST, TASK_RESULT, Message
 
 
@@ -48,7 +45,6 @@ def _result_payload(result: Any) -> dict[str, Any]:
     if result.status == TaskStatus.COMPLETED:
         payload["result"] = result.value
 
-    # Validate that the result can actually be sent as JSON.
     try:
         json.dumps(payload)
     except (TypeError, ValueError) as exc:
@@ -59,50 +55,68 @@ def _result_payload(result: Any) -> dict[str, Any]:
     return payload
 
 
+def _failure_response(
+    message: Message,
+    error: str,
+    task_id: str | None = None,
+) -> Message:
+    """Build a consistent failure response for a task request."""
+    payload: dict[str, Any] = {
+        "status": TaskStatus.FAILED.value,
+        "error": error,
+    }
+
+    if task_id is not None:
+        payload["task_id"] = task_id
+
+    return Message(
+        type=TASK_RESULT,
+        sender_id="tcp-server",
+        seq=message.seq,
+        payload=payload,
+    )
+
+
 async def _handle_task_request(
     message: Message,
     execution_engine: ExecutionEngine | None,
 ) -> Message:
     """Validate and execute a registered task request."""
+    if not isinstance(message.payload, dict):
+        return _failure_response(
+            message,
+            "TASK_REQUEST payload must be a dictionary.",
+        )
+
     task_data = message.payload.get("task")
 
     if execution_engine is None:
-        return Message(
-            type=TASK_RESULT,
-            sender_id="tcp-server",
-            seq=message.seq,
-            payload={
-                "status": TaskStatus.FAILED.value,
-                "error": "Remote task execution is not configured on this server.",
-            },
+        return _failure_response(
+            message,
+            "Remote task execution is not configured on this server.",
         )
 
     if not isinstance(task_data, dict):
-        return Message(
-            type=TASK_RESULT,
-            sender_id="tcp-server",
-            seq=message.seq,
-            payload={
-                "status": TaskStatus.FAILED.value,
-                "error": "TASK_REQUEST payload must contain a task object.",
-            },
+        return _failure_response(
+            message,
+            "TASK_REQUEST payload must contain a task object.",
         )
 
     try:
         task = deserialize_task(json.dumps(task_data))
     except (TaskSerializationError, TypeError, ValueError) as exc:
-        return Message(
-            type=TASK_RESULT,
-            sender_id="tcp-server",
-            seq=message.seq,
-            payload={
-                "status": TaskStatus.FAILED.value,
-                "error": f"Invalid task request: {exc}",
-            },
-        )
+        return _failure_response(message, f"Invalid task request: {exc}")
 
-    # Keep synchronous task execution off the asyncio event loop.
-    result = await asyncio.to_thread(execution_engine.execute, task)
+    try:
+        # Keep synchronous task execution off the asyncio event loop.
+        result = await asyncio.to_thread(execution_engine.execute, task)
+    except (ValueError, RuntimeError) as exc:
+        # Includes duplicate task IDs and an unavailable execution engine.
+        return _failure_response(
+            message,
+            f"Task execution rejected: {exc}",
+            task_id=task.task_id,
+        )
 
     return Message(
         type=TASK_RESULT,

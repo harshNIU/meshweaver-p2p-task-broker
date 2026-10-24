@@ -22,18 +22,21 @@ class TestTCPTaskExecution(unittest.IsolatedAsyncioTestCase):
         await self.server.wait_closed()
         self.engine.shutdown()
 
+    def make_request(self, task, seq):
+        return Message(
+            type=TASK_REQUEST,
+            sender_id="node-client",
+            seq=seq,
+            payload={"task": task_to_dict(task)},
+        )
+
     async def test_registered_task_executes_and_returns_result(self):
         self.engine.register("add", lambda a, b: a + b)
         task = Task(task_name="add", args=(10, 15))
 
-        message = Message(
-            type=TASK_REQUEST,
-            sender_id="node-client",
-            seq=1,
-            payload={"task": task_to_dict(task)},
+        response = await send_tcp_message(
+            self.host, self.port, self.make_request(task, 1)
         )
-
-        response = await send_tcp_message(self.host, self.port, message)
 
         self.assertEqual(response.type, TASK_RESULT)
         self.assertEqual(response.seq, 1)
@@ -46,14 +49,9 @@ class TestTCPTaskExecution(unittest.IsolatedAsyncioTestCase):
     async def test_unknown_task_returns_failure_result(self):
         task = Task(task_name="not_registered")
 
-        message = Message(
-            type=TASK_REQUEST,
-            sender_id="node-client",
-            seq=2,
-            payload={"task": task_to_dict(task)},
+        response = await send_tcp_message(
+            self.host, self.port, self.make_request(task, 2)
         )
-
-        response = await send_tcp_message(self.host, self.port, message)
 
         self.assertEqual(response.type, TASK_RESULT)
         self.assertEqual(response.seq, 2)
@@ -97,18 +95,43 @@ class TestTCPTaskExecution(unittest.IsolatedAsyncioTestCase):
         self.engine.register("fail", failing_task)
         task = Task(task_name="fail")
 
-        message = Message(
-            type=TASK_REQUEST,
-            sender_id="node-client",
-            seq=5,
-            payload={"task": task_to_dict(task)},
+        response = await send_tcp_message(
+            self.host, self.port, self.make_request(task, 5)
         )
-
-        response = await send_tcp_message(self.host, self.port, message)
 
         self.assertEqual(response.type, TASK_RESULT)
         self.assertEqual(response.payload["status"], TaskStatus.FAILED.value)
         self.assertIn("intentional failure", response.payload["error"])
+
+    async def test_duplicate_task_id_returns_failure_without_closing_response(self):
+        executions = []
+
+        def count_execution():
+            executions.append("executed")
+            return len(executions)
+
+        self.engine.register("count", count_execution)
+        task = Task(task_name="count", task_id="duplicate-network-task")
+
+        first_response = await send_tcp_message(
+            self.host, self.port, self.make_request(task, 6)
+        )
+        second_response = await send_tcp_message(
+            self.host, self.port, self.make_request(task, 7)
+        )
+
+        self.assertEqual(first_response.type, TASK_RESULT)
+        self.assertEqual(first_response.payload["status"], TaskStatus.COMPLETED.value)
+        self.assertEqual(first_response.payload["result"], 1)
+
+        self.assertEqual(second_response.type, TASK_RESULT)
+        self.assertEqual(second_response.seq, 7)
+        self.assertEqual(second_response.payload["task_id"], task.task_id)
+        self.assertEqual(second_response.payload["status"], TaskStatus.FAILED.value)
+        self.assertIn("already exists", second_response.payload["error"])
+
+        # The duplicate request must not execute the function a second time.
+        self.assertEqual(executions, ["executed"])
 
 
 if __name__ == "__main__":
