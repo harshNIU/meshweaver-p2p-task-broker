@@ -41,6 +41,7 @@ class UDPProtocol(asyncio.DatagramProtocol):
         self.seen_messages = set()
         self._task_results = OrderedDict()
         self._peer_list_seq = int(time.time_ns())
+        self._cleanup_task = None
 
         self.peer_manager = (
             peer_manager if peer_manager is not None else PeerConnectionManager()
@@ -48,10 +49,36 @@ class UDPProtocol(asyncio.DatagramProtocol):
         self.node_registry = {}
 
     def connection_made(self, transport):
-        """Store the UDP transport when the node starts."""
+        """Store the UDP transport and start background peer cleanup."""
         self.transport = transport
         self._refresh_self_node()
+        self._start_peer_cleanup()
         print(f"UDP node {self.node_id} started")
+
+    def _start_peer_cleanup(self):
+        """Start the periodic stale-peer cleanup task."""
+        if self._cleanup_task is not None and not self._cleanup_task.done():
+            return
+
+        self._cleanup_task = asyncio.create_task(self._cleanup_expired_peers_loop())
+
+    async def _cleanup_expired_peers_loop(self):
+        """Periodically remove peers that have exceeded their timeout."""
+        timeout = self.peer_manager.timeout_seconds
+        interval = max(0.01, min(timeout / 2, 1.0))
+
+        while self.transport is not None and not self.transport.is_closing():
+            await asyncio.sleep(interval)
+
+            if self.transport is None or self.transport.is_closing():
+                break
+
+            removed = self.cleanup_expired_peers()
+            if removed:
+                print(
+                    f"UDP node {self.node_id} removed expired peers: "
+                    f"{', '.join(removed)}"
+                )
 
     def _refresh_self_node(self):
         """Update this node's advertised address in the registry."""
@@ -353,7 +380,14 @@ class UDPProtocol(asyncio.DatagramProtocol):
         print(f"UDP error: {exc}")
 
     def connection_lost(self, exc):
-        """Report when the UDP transport closes."""
+        """Cancel background cleanup when the UDP transport closes."""
+        task = self._cleanup_task
+        self._cleanup_task = None
+
+        if task is not None and not task.done():
+            task.cancel()
+
+        self.transport = None
         print(f"UDP node {self.node_id} stopped")
 
     def cleanup_expired_peers(self, now=None):
