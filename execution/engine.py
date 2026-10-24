@@ -1,5 +1,6 @@
 """Task registration and execution for MeshWeaver."""
 
+import inspect
 import queue
 import threading
 import time
@@ -14,12 +15,13 @@ class TaskRegistrationError(ValueError):
 
 
 class ExecutionEngine:
-    """Execute registered tasks with retries, timeouts, and state tracking."""
+    """Execute registered tasks with retries, timeouts, cancellation, and state tracking."""
 
     def __init__(self) -> None:
         self._registry: dict[str, Callable[..., Any]] = {}
         self._results: dict[str, TaskResult] = {}
         self._statuses: dict[str, TaskStatus] = {}
+        self._cancel_events: dict[str, threading.Event] = {}
         self._state_lock = threading.RLock()
 
     def register(
@@ -39,7 +41,6 @@ class ExecutionEngine:
         with self._state_lock:
             if name in self._registry and not replace:
                 raise TaskRegistrationError(f"Task '{name}' is already registered.")
-
             self._registry[name] = function
 
     def unregister(self, name: str) -> bool:
@@ -62,6 +63,24 @@ class ExecutionEngine:
         with self._state_lock:
             return self._results.get(task_id)
 
+    def cancel_task(self, task_id: str) -> bool:
+        """Request cancellation of a running task.
+
+        Returns True when a cancellation request is accepted.
+        The task must cooperate by checking its cancel_event argument
+        to stop its own work promptly.
+        """
+        with self._state_lock:
+            if self._statuses.get(task_id) != TaskStatus.RUNNING:
+                return False
+
+            cancel_event = self._cancel_events.get(task_id)
+            if cancel_event is None or cancel_event.is_set():
+                return False
+
+            cancel_event.set()
+            return True
+
     def _set_status(self, task_id: str, status: TaskStatus) -> None:
         """Update a task's status safely."""
         with self._state_lock:
@@ -72,24 +91,59 @@ class ExecutionEngine:
         with self._state_lock:
             self._results[result.task_id] = result
             self._statuses[result.task_id] = result.status
-
+            self._cancel_events.pop(result.task_id, None)
         return result
+
+    @staticmethod
+    def _accepts_cancel_event(function: Callable[..., Any]) -> bool:
+        """Check whether the function explicitly accepts cancel_event."""
+        try:
+            parameters = inspect.signature(function).parameters
+        except (TypeError, ValueError):
+            return False
+
+        parameter = parameters.get("cancel_event")
+        return parameter is not None and parameter.kind in (
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            inspect.Parameter.KEYWORD_ONLY,
+        )
+
+    @classmethod
+    def _invoke(
+        cls,
+        function: Callable[..., Any],
+        task: Task,
+        cancel_event: threading.Event,
+    ) -> Any:
+        """Invoke a task, injecting its cancellation event when supported."""
+        kwargs = dict(task.kwargs)
+        if cls._accepts_cancel_event(function):
+            if "cancel_event" in kwargs:
+                raise ValueError(
+                    "Do not provide cancel_event in task kwargs; "
+                    "the engine supplies it automatically."
+                )
+            kwargs["cancel_event"] = cancel_event
+        return function(*task.args, **kwargs)
 
     @staticmethod
     def _execute_with_timeout(
         function: Callable[..., Any],
         task: Task,
+        cancel_event: threading.Event,
     ) -> tuple[bool, Any, str | None, float]:
         """Run a task in a daemon thread with a caller-side timeout.
 
         A timeout stops waiting for the result, but cannot terminate the
-        underlying Python function. Timed-out functions may continue running.
+        underlying Python function. Such functions may continue running.
         """
         result_queue: queue.Queue[tuple[bool, Any]] = queue.Queue(maxsize=1)
 
         def invoke() -> None:
             try:
-                result_queue.put((True, function(*task.args, **task.kwargs)))
+                result_queue.put(
+                    (True, ExecutionEngine._invoke(function, task, cancel_event))
+                )
             except Exception as exc:  # noqa: BLE001
                 result_queue.put((False, exc))
 
@@ -97,7 +151,6 @@ class ExecutionEngine:
         worker = threading.Thread(target=invoke, daemon=True)
         worker.start()
         worker.join(task.timeout_seconds)
-
         duration = time.perf_counter() - started_at
 
         if worker.is_alive():
@@ -111,12 +164,7 @@ class ExecutionEngine:
         succeeded, value = result_queue.get()
 
         if not succeeded:
-            return (
-                False,
-                None,
-                f"{type(value).__name__}: {value}",
-                duration,
-            )
+            return False, None, f"{type(value).__name__}: {value}", duration
 
         return True, value, None, duration
 
@@ -133,6 +181,8 @@ class ExecutionEngine:
                     error=f"Task ID already exists: {task.task_id}",
                 )
 
+            cancel_event = threading.Event()
+            self._cancel_events[task.task_id] = cancel_event
             self._statuses[task.task_id] = TaskStatus.PENDING
 
         if function is None:
@@ -145,25 +195,56 @@ class ExecutionEngine:
                 )
             )
 
-        self._set_status(task.task_id, TaskStatus.RUNNING)
+        with self._state_lock:
+            if cancel_event.is_set():
+                return self._store_result(
+                    TaskResult(
+                        task_id=task.task_id,
+                        status=TaskStatus.CANCELLED,
+                        attempts=0,
+                        error="Task cancelled before execution.",
+                    )
+                )
+            self._statuses[task.task_id] = TaskStatus.RUNNING
 
         total_duration = 0.0
         attempts = 0
         last_error = None
 
         for attempt in range(task.max_retries + 1):
+            if cancel_event.is_set():
+                return self._store_result(
+                    TaskResult(
+                        task_id=task.task_id,
+                        status=TaskStatus.CANCELLED,
+                        attempts=attempts,
+                        error="Task cancellation requested.",
+                        duration_seconds=total_duration,
+                    )
+                )
+
             attempts = attempt + 1
 
             if task.timeout_seconds is None:
                 started_at = time.perf_counter()
-
                 try:
-                    value = function(*task.args, **task.kwargs)
+                    value = self._invoke(function, task, cancel_event)
                 except Exception as exc:  # noqa: BLE001
                     total_duration += time.perf_counter() - started_at
                     last_error = f"{type(exc).__name__}: {exc}"
                 else:
                     total_duration += time.perf_counter() - started_at
+
+                    if cancel_event.is_set():
+                        return self._store_result(
+                            TaskResult(
+                                task_id=task.task_id,
+                                status=TaskStatus.CANCELLED,
+                                attempts=attempts,
+                                error="Task cancellation requested.",
+                                duration_seconds=total_duration,
+                            )
+                        )
 
                     return self._store_result(
                         TaskResult(
@@ -174,13 +255,22 @@ class ExecutionEngine:
                             duration_seconds=total_duration,
                         )
                     )
-
             else:
                 succeeded, value, error, duration = self._execute_with_timeout(
-                    function,
-                    task,
+                    function, task, cancel_event
                 )
                 total_duration += duration
+
+                if cancel_event.is_set():
+                    return self._store_result(
+                        TaskResult(
+                            task_id=task.task_id,
+                            status=TaskStatus.CANCELLED,
+                            attempts=attempts,
+                            error="Task cancellation requested.",
+                            duration_seconds=total_duration,
+                        )
+                    )
 
                 if succeeded:
                     return self._store_result(
@@ -195,13 +285,35 @@ class ExecutionEngine:
 
                 last_error = error
 
-                # Timed-out functions may continue running. Retrying them could
+                # Timed-out functions may continue running. Retrying could
                 # duplicate side effects, so stop after a timeout.
                 if last_error and "Task timed out after" in last_error:
                     break
 
+            if cancel_event.is_set():
+                return self._store_result(
+                    TaskResult(
+                        task_id=task.task_id,
+                        status=TaskStatus.CANCELLED,
+                        attempts=attempts,
+                        error="Task cancellation requested.",
+                        duration_seconds=total_duration,
+                    )
+                )
+
             if attempt < task.max_retries:
                 continue
+
+        if cancel_event.is_set():
+            return self._store_result(
+                TaskResult(
+                    task_id=task.task_id,
+                    status=TaskStatus.CANCELLED,
+                    attempts=attempts,
+                    error="Task cancellation requested.",
+                    duration_seconds=total_duration,
+                )
+            )
 
         return self._store_result(
             TaskResult(

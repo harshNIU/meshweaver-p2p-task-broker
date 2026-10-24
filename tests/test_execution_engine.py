@@ -255,3 +255,96 @@ def test_running_status_can_be_observed_during_execution():
 
     assert not worker.is_alive()
     assert engine.get_task_status(task.task_id) == TaskStatus.COMPLETED
+
+
+def test_running_task_can_be_cancelled_cooperatively():
+    started = threading.Event()
+    task_id = "cancel-cooperative"
+
+    def cancellable_task(cancel_event):
+        started.set()
+        cancel_event.wait(timeout=2)
+        return "stopped"
+
+    engine = ExecutionEngine()
+    engine.register("cancellable", cancellable_task)
+    task = Task(task_name="cancellable", task_id=task_id)
+    results = []
+
+    worker = threading.Thread(target=lambda: results.append(engine.execute(task)))
+    worker.start()
+
+    try:
+        assert started.wait(timeout=1)
+        assert engine.get_task_status(task_id) == TaskStatus.RUNNING
+        assert engine.cancel_task(task_id) is True
+        assert engine.cancel_task(task_id) is False
+    finally:
+        worker.join(timeout=2)
+
+    assert not worker.is_alive()
+    assert results[0].status == TaskStatus.CANCELLED
+    assert engine.get_task_status(task_id) == TaskStatus.CANCELLED
+    assert engine.get_task_result(task_id) == results[0]
+
+
+def test_cancel_unknown_task_returns_false():
+    engine = ExecutionEngine()
+
+    assert engine.cancel_task("unknown-task") is False
+
+
+def test_completed_task_cannot_be_cancelled():
+    engine = ExecutionEngine()
+    engine.register("quick", lambda: "done")
+    task = Task(task_name="quick", task_id="already-completed")
+
+    result = engine.execute(task)
+
+    assert result.status == TaskStatus.COMPLETED
+    assert engine.cancel_task(task.task_id) is False
+
+
+def test_task_without_cancel_event_parameter_still_works():
+    engine = ExecutionEngine()
+    engine.register("add", lambda a, b: a + b)
+
+    result = engine.execute(Task(task_name="add", args=(4, 6), task_id="ordinary-task"))
+
+    assert result.status == TaskStatus.COMPLETED
+    assert result.value == 10
+
+
+def test_cancelled_task_is_not_retried():
+    calls = 0
+    started = threading.Event()
+
+    def cancellable_task(cancel_event):
+        nonlocal calls
+        calls += 1
+        started.set()
+        cancel_event.wait(timeout=2)
+        raise RuntimeError("cancelled work stopped")
+
+    engine = ExecutionEngine()
+    engine.register("cancellable", cancellable_task)
+    task = Task(
+        task_name="cancellable",
+        task_id="cancel-no-retry",
+        max_retries=3,
+    )
+    results = []
+
+    worker = threading.Thread(target=lambda: results.append(engine.execute(task)))
+    worker.start()
+
+    try:
+        assert started.wait(timeout=1)
+        assert engine.cancel_task(task.task_id) is True
+    finally:
+        worker.join(timeout=2)
+
+    assert not worker.is_alive()
+    assert calls == 1
+    assert results[0].status == TaskStatus.CANCELLED
+    assert results[0].attempts == 1
