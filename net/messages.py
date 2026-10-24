@@ -1,12 +1,14 @@
+
 """Standard message format for MeshWeaver."""
 
 import json
 import time
 from dataclasses import asdict, dataclass
 
-# Message types used for peer communication
+# Message types used for peer communication.
 PING = "PING"
 PONG = "PONG"
+PEER_LIST = "PEER_LIST"
 TASK_REQUEST = "TASK_REQUEST"
 TASK_RESULT = "TASK_RESULT"
 
