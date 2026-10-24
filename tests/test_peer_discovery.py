@@ -1,4 +1,3 @@
-
 import asyncio
 import time
 import unittest
@@ -10,12 +9,8 @@ from net.udp_node import start_udp_node
 
 class TestPeerDiscovery(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
-        self.transport_a, self.protocol_a = await start_udp_node(
-            node_id="node-a"
-        )
-        self.transport_b, self.protocol_b = await start_udp_node(
-            node_id="node-b"
-        )
+        self.transport_a, self.protocol_a = await start_udp_node(node_id="node-a")
+        self.transport_b, self.protocol_b = await start_udp_node(node_id="node-b")
 
     async def asyncTearDown(self):
         self.transport_a.close()
@@ -53,9 +48,7 @@ class TestPeerDiscovery(unittest.IsolatedAsyncioTestCase):
             address_b,
         )
 
-        await self.wait_for_condition(
-            lambda: "node-c" in self.protocol_a.node_registry
-        )
+        await self.wait_for_condition(lambda: "node-c" in self.protocol_a.node_registry)
 
         discovered = self.protocol_a.node_registry["node-c"]
         self.assertEqual(discovered.host, "127.0.0.3")
@@ -91,9 +84,7 @@ class TestPeerDiscovery(unittest.IsolatedAsyncioTestCase):
 
         self.protocol_b.send_message(message, address_a)
 
-        await self.wait_for_condition(
-            lambda: "node-c" in self.protocol_a.node_registry
-        )
+        await self.wait_for_condition(lambda: "node-c" in self.protocol_a.node_registry)
 
         node = self.protocol_a.node_registry["node-c"]
         self.assertEqual(node.host, "127.0.0.3")

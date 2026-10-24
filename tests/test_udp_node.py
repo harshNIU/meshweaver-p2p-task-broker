@@ -1,4 +1,3 @@
-
 import asyncio
 import json
 import unittest
@@ -141,8 +140,7 @@ class TestUDPNode(unittest.IsolatedAsyncioTestCase):
         self.protocol_a.send_message(message, address_b)
 
         await self.wait_for_condition(
-            lambda: self.protocol_b.peer_manager.get_peer_address("node-a")
-            is not None
+            lambda: self.protocol_b.peer_manager.get_peer_address("node-a") is not None
         )
 
         self.assertEqual(

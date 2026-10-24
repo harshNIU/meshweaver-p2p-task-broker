@@ -1,4 +1,3 @@
-
 """Standard message format for MeshWeaver."""
 
 import json

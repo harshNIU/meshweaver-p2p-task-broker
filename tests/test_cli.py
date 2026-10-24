@@ -1,4 +1,3 @@
-
 import asyncio
 
 from typer.testing import CliRunner
@@ -49,9 +48,7 @@ class FakeProtocol:
 def install_fake_node(monkeypatch, protocol, transport):
     calls = {}
 
-    async def fake_start_udp_node(
-        host, port, node_id, execution_engine=None
-    ):
+    async def fake_start_udp_node(host, port, node_id, execution_engine=None):
         calls.update(
             host=host,
             port=port,
@@ -68,9 +65,7 @@ def test_start_command(monkeypatch):
     calls = {}
     transport = FakeTransport()
 
-    async def fake_start_udp_node(
-        host, port, node_id, execution_engine=None
-    ):
+    async def fake_start_udp_node(host, port, node_id, execution_engine=None):
         calls.update(
             host=host,
             port=port,

@@ -1,4 +1,3 @@
-
 """Command-line interface for MeshWeaver."""
 
 import asyncio
@@ -53,9 +52,7 @@ def start(
 ):
     """Start a MeshWeaver node."""
     if not 1 <= port <= 65535:
-        console.print(
-            "[red]Error: port must be between 1 and 65535.[/red]"
-        )
+        console.print("[red]Error: port must be between 1 and 65535.[/red]")
         raise typer.Exit(code=1)
 
     async def run_node():
@@ -70,9 +67,7 @@ def start(
                 from execution.builtin_tasks import register_builtin_tasks
 
                 register_builtin_tasks(engine)
-                console.print(
-                    "[green]Registered demo tasks: add, multiply[/green]"
-                )
+                console.print("[green]Registered demo tasks: add, multiply[/green]")
 
             transport, _protocol = await start_udp_node(
                 host="127.0.0.1",
@@ -82,8 +77,7 @@ def start(
             )
 
             console.print(
-                f"[green]MeshWeaver node running on "
-                f"127.0.0.1:{port}[/green]"
+                f"[green]MeshWeaver node running on " f"127.0.0.1:{port}[/green]"
             )
             console.print("Press Ctrl+C to stop the node.")
 
@@ -165,9 +159,7 @@ def submit(
         ValueError,
         TaskSerializationError,
     ) as exc:
-        console.print(
-            f"[red]Invalid task submission: {exc}[/red]"
-        )
+        console.print(f"[red]Invalid task submission: {exc}[/red]")
         raise typer.Exit(code=1) from exc
 
     async def send_task():
@@ -193,10 +185,7 @@ def submit(
 
             protocol.send_message(request, (host, port))
 
-            console.print(
-                f"Submitted task '{task.task_name}' "
-                f"to {host}:{port}"
-            )
+            console.print(f"Submitted task '{task.task_name}' " f"to {host}:{port}")
             console.print(f"Task ID: {task.task_id}")
 
             result = await wait_for_task_result(
@@ -224,15 +213,11 @@ def submit(
         raise typer.Exit(code=1) from exc
 
     except OSError as exc:
-        console.print(
-            f"[red]UDP communication failed: {exc}[/red]"
-        )
+        console.print(f"[red]UDP communication failed: {exc}[/red]")
         raise typer.Exit(code=1) from exc
 
     except RuntimeError as exc:
-        console.print(
-            f"[red]Could not submit task: {exc}[/red]"
-        )
+        console.print(f"[red]Could not submit task: {exc}[/red]")
         raise typer.Exit(code=1) from exc
 
     status = result.get("status", "unknown")
@@ -241,14 +226,10 @@ def submit(
     if status == "completed":
         console.print(f"Result: {result.get('value')}")
         console.print(
-            f"Duration: "
-            f"{result.get('duration_seconds', 0.0):.6f} seconds"
+            f"Duration: " f"{result.get('duration_seconds', 0.0):.6f} seconds"
         )
     else:
-        console.print(
-            f"Error: "
-            f"{result.get('error') or 'Unknown execution error'}"
-        )
+        console.print(f"Error: " f"{result.get('error') or 'Unknown execution error'}")
 
     if status != "completed":
         raise typer.Exit(code=1)
