@@ -5,3 +5,5 @@ pytest==8.3.3
 black==26.10.1
 ruff==0.17.0
 psutil
+
+cloudpickle>=3.0.0

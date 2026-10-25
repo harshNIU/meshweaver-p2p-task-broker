@@ -1,4 +1,5 @@
 """Thread-safe in-memory registry of actual task lifecycle records."""
+
 from __future__ import annotations
 
 import threading
@@ -81,8 +82,11 @@ class TaskRegistry:
     def snapshot_tasks(self) -> list[dict[str, Any]]:
         with self._lock:
             return [
-                {key: value for key, value in record.items()
-                 if key not in {"created_at"}}
+                {
+                    key: value
+                    for key, value in record.items()
+                    if key not in {"created_at"}
+                }
                 for record in self._records.values()
             ]
 
