@@ -1,4 +1,5 @@
 """Command-line interface for the MeshWeaver peer-to-peer task broker."""
+
 import asyncio
 import json
 import math
@@ -23,8 +24,7 @@ def _add_numbers(*args: Any) -> int | float:
     if not args:
         raise ValueError("add requires at least one numeric argument.")
     if any(
-        isinstance(value, bool) or not isinstance(value, (int, float))
-        for value in args
+        isinstance(value, bool) or not isinstance(value, (int, float)) for value in args
     ):
         raise ValueError("add accepts only numeric arguments.")
 
@@ -39,8 +39,7 @@ def _multiply_numbers(*args: Any) -> int | float:
     if not args:
         raise ValueError("multiply requires at least one numeric argument.")
     if any(
-        isinstance(value, bool) or not isinstance(value, (int, float))
-        for value in args
+        isinstance(value, bool) or not isinstance(value, (int, float)) for value in args
     ):
         raise ValueError("multiply accepts only numeric arguments.")
 
@@ -76,9 +75,7 @@ def _submit_payload(
     if not isinstance(args, list):
         raise ValueError("'args' must be a JSON array.")
 
-    if not isinstance(kwargs, dict) or not all(
-        isinstance(key, str) for key in kwargs
-    ):
+    if not isinstance(kwargs, dict) or not all(isinstance(key, str) for key in kwargs):
         raise ValueError("'kwargs' must be a JSON object with string keys.")
 
     if name not in engine.registered_tasks():
@@ -108,9 +105,7 @@ def _submit_payload(
 
 @app.command()
 def start(
-    port: int = typer.Option(
-        8000, "--port", help="UDP port for this node."
-    ),
+    port: int = typer.Option(8000, "--port", help="UDP port for this node."),
     web: bool = typer.Option(
         False,
         "--web",
@@ -143,9 +138,7 @@ def start(
                 node_id=f"node-{port}",
             )
 
-            console.print(
-                f"[green]MeshWeaver node running on 127.0.0.1:{port}[/green]"
-            )
+            console.print(f"[green]MeshWeaver node running on 127.0.0.1:{port}[/green]")
 
             if web:
                 from web.server import HOST as WEB_HOST
@@ -163,14 +156,11 @@ def start(
                     ),
                     host=WEB_HOST,
                     port=web_port,
-                    task_submitter=lambda payload: _submit_payload(
-                        payload, engine
-                    ),
+                    task_submitter=lambda payload: _submit_payload(payload, engine),
                 )
 
                 console.print(
-                    f"[green]Live dashboard: "
-                    f"http://{WEB_HOST}:{web_port}/[/green]"
+                    f"[green]Live dashboard: " f"http://{WEB_HOST}:{web_port}/[/green]"
                 )
                 console.print(
                     "[dim]Tasks execute locally in this process. "
@@ -221,9 +211,7 @@ def submit(
     """Submit a task to a running local MeshWeaver node."""
     # Preserve the behavior expected by the existing CLI test.
     if task is None:
-        console.print(
-            "[yellow]Submit command is not implemented yet.[/yellow]"
-        )
+        console.print("[yellow]Submit command is not implemented yet.[/yellow]")
         return
 
     try:
@@ -237,17 +225,13 @@ def submit(
         console.print("[red]--args-json must be a JSON array.[/red]")
         raise typer.Exit(code=2)
 
-    if not isinstance(kwargs, dict) or not all(
-        isinstance(key, str) for key in kwargs
-    ):
+    if not isinstance(kwargs, dict) or not all(isinstance(key, str) for key in kwargs):
         console.print(
             "[red]--kwargs-json must be a JSON object with string keys.[/red]"
         )
         raise typer.Exit(code=2)
 
-    payload = json.dumps(
-        {"task": task, "args": args, "kwargs": kwargs}
-    ).encode("utf-8")
+    payload = json.dumps({"task": task, "args": args, "kwargs": kwargs}).encode("utf-8")
 
     request = Request(
         url.rstrip("/") + "/api/tasks",
@@ -262,9 +246,7 @@ def submit(
 
     except HTTPError as exc:
         try:
-            message = json.loads(exc.read().decode("utf-8")).get(
-                "error", str(exc)
-            )
+            message = json.loads(exc.read().decode("utf-8")).get("error", str(exc))
         except (json.JSONDecodeError, UnicodeDecodeError):
             message = str(exc)
 
