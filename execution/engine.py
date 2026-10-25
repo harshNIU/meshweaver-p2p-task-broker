@@ -5,6 +5,7 @@ import queue
 import threading
 import time
 from collections.abc import Callable
+from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Any
 
 from execution.models import Task, TaskResult, TaskStatus
@@ -15,14 +16,31 @@ class TaskRegistrationError(ValueError):
 
 
 class ExecutionEngine:
-    """Execute registered tasks with retries, timeouts, cancellation, and state tracking."""
+    """Execute tasks synchronously or asynchronously.
 
-    def __init__(self) -> None:
+    Supports retries, timeouts, cooperative cancellation, state tracking,
+    background submission, result retrieval, and executor shutdown.
+    """
+
+    def __init__(self, max_workers: int = 4) -> None:
+        if (
+            isinstance(max_workers, bool)
+            or not isinstance(max_workers, int)
+            or max_workers < 1
+        ):
+            raise ValueError("max_workers must be a positive integer.")
+
         self._registry: dict[str, Callable[..., Any]] = {}
         self._results: dict[str, TaskResult] = {}
         self._statuses: dict[str, TaskStatus] = {}
         self._cancel_events: dict[str, threading.Event] = {}
+        self._futures: dict[str, Future[TaskResult]] = {}
         self._state_lock = threading.RLock()
+        self._shutdown = False
+        self._executor = ThreadPoolExecutor(
+            max_workers=max_workers,
+            thread_name_prefix="meshweaver-task",
+        )
 
     def register(
         self,
@@ -59,16 +77,15 @@ class ExecutionEngine:
             return self._statuses.get(task_id)
 
     def get_task_result(self, task_id: str) -> TaskResult | None:
-        """Return a task's result if available, or None if unavailable."""
+        """Return a task's stored result, or None if not yet available."""
         with self._state_lock:
             return self._results.get(task_id)
 
     def cancel_task(self, task_id: str) -> bool:
         """Request cancellation of a running task.
 
-        Returns True when a cancellation request is accepted.
-        The task must cooperate by checking its cancel_event argument
-        to stop its own work promptly.
+        The task must cooperate by checking its injected ``cancel_event``.
+        This method does not forcibly terminate arbitrary Python functions.
         """
         with self._state_lock:
             if self._statuses.get(task_id) != TaskStatus.RUNNING:
@@ -81,22 +98,18 @@ class ExecutionEngine:
             cancel_event.set()
             return True
 
-    def _set_status(self, task_id: str, status: TaskStatus) -> None:
-        """Update a task's status safely."""
-        with self._state_lock:
-            self._statuses[task_id] = status
-
     def _store_result(self, result: TaskResult) -> TaskResult:
-        """Store a result and its final status."""
+        """Store a result and its final status safely."""
         with self._state_lock:
             self._results[result.task_id] = result
             self._statuses[result.task_id] = result.status
             self._cancel_events.pop(result.task_id, None)
+            self._futures.pop(result.task_id, None)
         return result
 
     @staticmethod
     def _accepts_cancel_event(function: Callable[..., Any]) -> bool:
-        """Check whether the function explicitly accepts cancel_event."""
+        """Check whether a function explicitly accepts cancel_event."""
         try:
             parameters = inspect.signature(function).parameters
         except (TypeError, ValueError):
@@ -135,7 +148,7 @@ class ExecutionEngine:
         """Run a task in a daemon thread with a caller-side timeout.
 
         A timeout stops waiting for the result, but cannot terminate the
-        underlying Python function. Such functions may continue running.
+        underlying Python function. That function may continue running.
         """
         result_queue: queue.Queue[tuple[bool, Any]] = queue.Queue(maxsize=1)
 
@@ -168,34 +181,93 @@ class ExecutionEngine:
 
         return True, value, None, duration
 
-    def execute(self, task: Task) -> TaskResult:
-        """Execute a task, tracking its status and retrying failures."""
+    def _reserve_task(self, task: Task) -> threading.Event:
+        """Reserve a task ID before execution or background scheduling."""
         with self._state_lock:
-            function = self._registry.get(task.task_name)
+            if self._shutdown:
+                raise RuntimeError("ExecutionEngine has been shut down.")
 
             if task.task_id in self._statuses:
-                return TaskResult(
-                    task_id=task.task_id,
-                    status=TaskStatus.FAILED,
-                    attempts=0,
-                    error=f"Task ID already exists: {task.task_id}",
-                )
+                raise ValueError(f"Task ID already exists: {task.task_id}")
 
             cancel_event = threading.Event()
             self._cancel_events[task.task_id] = cancel_event
             self._statuses[task.task_id] = TaskStatus.PENDING
+            return cancel_event
 
-        if function is None:
-            return self._store_result(
-                TaskResult(
-                    task_id=task.task_id,
-                    status=TaskStatus.FAILED,
-                    attempts=0,
-                    error=f"Unknown task: {task.task_name}",
+    def execute(self, task: Task) -> TaskResult:
+        """Execute a task synchronously and return its result."""
+        self._reserve_task(task)
+        return self._execute_reserved(task)
+
+    def submit_task(self, task: Task) -> Future[TaskResult]:
+        """Submit a task in the background and return its Future.
+
+        The task ID is reserved before scheduling, preventing simultaneous
+        submissions from executing the same task ID.
+        """
+        self._reserve_task(task)
+
+        try:
+            with self._state_lock:
+                future = self._executor.submit(self._execute_reserved, task)
+                self._futures[task.task_id] = future
+                future.add_done_callback(
+                    lambda completed, task_id=task.task_id: self._handle_future_done(
+                        task_id, completed
+                    )
                 )
-            )
+                return future
+        except Exception:
+            with self._state_lock:
+                # Roll back only if execution has not already started.
+                if self._statuses.get(task.task_id) == TaskStatus.PENDING:
+                    self._statuses.pop(task.task_id, None)
+                    self._cancel_events.pop(task.task_id, None)
+                    self._futures.pop(task.task_id, None)
+            raise
+
+    def _handle_future_done(
+        self,
+        task_id: str,
+        future: Future[TaskResult],
+    ) -> None:
+        """Record a result when a background Future is cancelled pre-start."""
+        if not future.cancelled():
+            return
 
         with self._state_lock:
+            if task_id in self._results:
+                return
+
+        self._store_result(
+            TaskResult(
+                task_id=task_id,
+                status=TaskStatus.CANCELLED,
+                attempts=0,
+                error="Task cancelled before execution.",
+            )
+        )
+
+    def _execute_reserved(self, task: Task) -> TaskResult:
+        """Execute a task whose ID has already been reserved."""
+        with self._state_lock:
+            function = self._registry.get(task.task_name)
+            cancel_event = self._cancel_events.get(task.task_id)
+
+            if cancel_event is None:
+                # This can happen only if a pre-start cancellation completed.
+                existing_result = self._results.get(task.task_id)
+                if existing_result is not None:
+                    return existing_result
+
+                return TaskResult(
+                    task_id=task.task_id,
+                    status=TaskStatus.CANCELLED,
+                    attempts=0,
+                    error="Task cancelled before execution.",
+                )
+
             if cancel_event.is_set():
                 return self._store_result(
                     TaskResult(
@@ -205,6 +277,17 @@ class ExecutionEngine:
                         error="Task cancelled before execution.",
                     )
                 )
+
+            if function is None:
+                return self._store_result(
+                    TaskResult(
+                        task_id=task.task_id,
+                        status=TaskStatus.FAILED,
+                        attempts=0,
+                        error=f"Unknown task: {task.task_name}",
+                    )
+                )
+
             self._statuses[task.task_id] = TaskStatus.RUNNING
 
         total_duration = 0.0
@@ -324,3 +407,21 @@ class ExecutionEngine:
                 duration_seconds=total_duration,
             )
         )
+
+    def shutdown(
+        self,
+        wait: bool = True,
+        *,
+        cancel_futures: bool = False,
+    ) -> None:
+        """Shut down background execution.
+
+        If cancel_futures is True, tasks still waiting in the executor queue
+        are cancelled. Running tasks are not forcibly terminated.
+        """
+        with self._state_lock:
+            if self._shutdown:
+                return
+            self._shutdown = True
+
+        self._executor.shutdown(wait=wait, cancel_futures=cancel_futures)
