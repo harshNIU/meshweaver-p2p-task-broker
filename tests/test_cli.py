@@ -207,7 +207,7 @@ def test_submit_times_out(monkeypatch):
 
 
 def test_start_help_includes_bootstrap_option():
-    result = runner.invoke(app, ["start", "--help"])
+    result = runner.invoke(app, ["start", "--help"], color=False)
 
     assert result.exit_code == 0
     assert "--bootstrap" in result.output
