@@ -1,3 +1,4 @@
+
 """MeshWeaver CLI for starting nodes and submitting tasks."""
 
 import asyncio
@@ -170,15 +171,19 @@ def start(
             typer.echo(f"MeshWeaver node running at {host}:{port}")
 
             if web:
-                from dashboard.server import create_dashboard_server
-                from dashboard.snapshot import build_snapshot
+                from web.server import create_dashboard_server
+                from web.snapshot import build_snapshot
 
                 dashboard = create_dashboard_server(
                     host=host,
                     port=web_port,
                     snapshot_provider=lambda: build_snapshot(
                         protocol=protocol,
-                        execution_engine=engine,
+                        transport=transport,
+                        node_id=node_id or f"node-{port}",
+                        host=host,
+                        port=port,
+                        task_registry=getattr(engine, "task_registry", None),
                     ),
                 )
                 typer.echo(f"Dashboard: http://{host}:{web_port}/")
