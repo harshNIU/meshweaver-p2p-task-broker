@@ -204,3 +204,48 @@ def test_submit_times_out(monkeypatch):
     assert result.exit_code == 1
     assert "Timed out" in result.output
     assert transport.closed
+
+
+def test_start_help_includes_bootstrap_option():
+    result = runner.invoke(app, ["start", "--help"])
+
+    assert result.exit_code == 0
+    assert "--bootstrap" in result.output
+    assert "host:port" in result.output
+
+
+def test_start_bootstrap_joins_seed(monkeypatch):
+    transport = FakeTransport()
+    calls = {}
+
+    async def fake_start_udp_node(host, port, node_id, execution_engine=None):
+        return transport, object()
+
+    async def fake_request_peer_list(protocol, node_id, seed, timeout):
+        calls.update(
+            node_id=node_id,
+            seed_host=seed.host,
+            seed_port=seed.port,
+            timeout=timeout,
+        )
+        return True
+
+    async def finish_wait(self):
+        return None
+
+    monkeypatch.setattr("cli.main.start_udp_node", fake_start_udp_node)
+    monkeypatch.setattr("cli.main.request_peer_list", fake_request_peer_list)
+    monkeypatch.setattr("cli.main.asyncio.Event.wait", finish_wait)
+
+    result = runner.invoke(
+        app,
+        ["start", "--port", "8124", "--bootstrap", "127.0.0.1:9000"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert calls["node_id"] == "node-8124"
+    assert calls["seed_host"] == "127.0.0.1"
+    assert calls["seed_port"] == 9000
+    assert calls["timeout"] == 2.0
+    assert "Registered with seed 127.0.0.1:9000" in result.output
+    assert transport.closed

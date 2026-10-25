@@ -104,7 +104,8 @@ def start(
     seed: str | None = typer.Option(
         None,
         "--seed",
-        help="Register this node with a seed address, such as 127.0.0.1:8000.",
+        "--bootstrap",
+        help="Register this node with a seed/bootstrap host:port address, such as 127.0.0.1:8000.",
     ),
 ):
     """Start a MeshWeaver node, optionally registering with a seed."""
