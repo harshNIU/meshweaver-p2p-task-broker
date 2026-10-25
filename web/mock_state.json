@@ -1,0 +1,74 @@
+
+{
+  "snapshot_at": "2026-10-25T10:00:00",
+  "mode": "mock",
+  "nodes": [
+    {
+      "node_id": "node-8000",
+      "host": "127.0.0.1",
+      "port": 8000,
+      "cpu": 24.5,
+      "ram": 38.0,
+      "last_seen": 1792922400.0,
+      "state": "ALIVE"
+    },
+    {
+      "node_id": "node-8001",
+      "host": "127.0.0.1",
+      "port": 8001,
+      "cpu": 51.2,
+      "ram": 62.4,
+      "last_seen": 1792922390.0,
+      "state": "ALIVE"
+    },
+    {
+      "node_id": "node-8002",
+      "host": "127.0.0.1",
+      "port": 8002,
+      "cpu": 0.0,
+      "ram": 0.0,
+      "last_seen": 1792922300.0,
+      "state": "SUSPECT"
+    }
+  ],
+  "tasks": [
+    {
+      "task_id": "task-001",
+      "name": "sample_analysis",
+      "status": "COMPLETED",
+      "assigned_to": "node-8000",
+      "attempt": 1
+    },
+    {
+      "task_id": "task-002",
+      "name": "sample_processing",
+      "status": "RUNNING",
+      "assigned_to": "node-8001",
+      "attempt": 1
+    },
+    {
+      "task_id": "task-003",
+      "name": "sample_report",
+      "status": "PENDING",
+      "assigned_to": null,
+      "attempt": 0
+    }
+  ],
+  "events": [
+    {
+      "timestamp": "10:00:00",
+      "level": "INFO",
+      "message": "Mock dashboard state loaded"
+    },
+    {
+      "timestamp": "09:59:50",
+      "level": "INFO",
+      "message": "node-8001 heartbeat received"
+    },
+    {
+      "timestamp": "09:59:40",
+      "level": "WARNING",
+      "message": "node-8002 may be unavailable"
+    }
+  ]
+}
