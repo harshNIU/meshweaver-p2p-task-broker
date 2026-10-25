@@ -176,3 +176,22 @@ def test_submit_accepts_allowlisted_task():
     finally:
         server.shutdown()
         server.server_close()
+
+
+def test_submit_rejects_oversized_request():
+    server = run_server(submitter=lambda payload: {"task_id": "task-1"})
+    try:
+        host, port = server.server_address
+        status, payload = post_json(
+            f"http://{host}:{port}/api/submit",
+            {
+                "name": "add",
+                "args": ["x" * 5000],
+            },
+            token="test-token",
+        )
+        assert status == 413
+        assert "4096 bytes" in payload["error"]
+    finally:
+        server.shutdown()
+        server.server_close()
