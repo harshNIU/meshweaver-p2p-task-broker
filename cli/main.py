@@ -73,7 +73,7 @@ def _submit_payload(
         raise ValueError("'task' must be a non-empty string.")
 
     if not isinstance(args, list):
-        raise ValueError("'args' must be a JSON array.")
+        raise TypeError("'args' must be a JSON array.")
 
     if not isinstance(kwargs, dict) or not all(isinstance(key, str) for key in kwargs):
         raise ValueError("'kwargs' must be a JSON object with string keys.")
