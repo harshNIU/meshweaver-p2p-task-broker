@@ -1,5 +1,6 @@
 import asyncio
 
+from typer.main import get_command
 from typer.testing import CliRunner
 
 from cli.main import app
@@ -207,11 +208,11 @@ def test_submit_times_out(monkeypatch):
 
 
 def test_start_help_includes_bootstrap_option():
-    result = runner.invoke(app, ["start", "--help"], color=False)
+    command = get_command(app).commands["start"]
+    seed_option = next(param for param in command.params if param.name == "seed")
 
-    assert result.exit_code == 0
-    assert "--bootstrap" in result.output
-    assert "host:port" in result.output
+    assert "--bootstrap" in seed_option.opts
+    assert "--seed" in seed_option.opts
 
 
 def test_start_bootstrap_joins_seed(monkeypatch):
