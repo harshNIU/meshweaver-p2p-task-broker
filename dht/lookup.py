@@ -1,4 +1,3 @@
-
 """Iterative alpha-parallel lookup with bounded candidates and dead-peer handling."""
 
 import asyncio
@@ -13,8 +12,7 @@ async def iterative_lookup(node, target_id):
     target_id = normalize_id(target_id)
 
     candidates = {
-        contact.node_id: contact
-        for contact in node.routing.closest(target_id)
+        contact.node_id: contact for contact in node.routing.closest(target_id)
     }
     queried = set()
     responsive = {}
@@ -26,9 +24,7 @@ async def iterative_lookup(node, target_id):
         )
 
         batch = [
-            contact
-            for contact in nearest[: node.k]
-            if contact.node_id not in queried
+            contact for contact in nearest[: node.k] if contact.node_id not in queried
         ][: node.alpha]
 
         if not batch:
@@ -59,7 +55,7 @@ async def iterative_lookup(node, target_id):
                         {"target_id": target_id},
                         peer.node_id,
                     )
-                except Exception:
+                except (TimeoutError, OSError, ValueError):
                     candidates.pop(peer.node_id, None)
 
                     # Keep the routing entry. A failed lookup alone

@@ -1,4 +1,3 @@
-
 """MeshWeaver CLI for starting nodes and submitting tasks."""
 
 import asyncio
@@ -13,8 +12,7 @@ from execution.builtin_tasks import register_builtin_tasks
 from execution.engine import ExecutionEngine
 from execution.models import Task
 from net.bootstrap import parse_seed_address, request_peer_list
-from net.messages import Message, TASK_REQUEST, TASK_RESULT, PEER_LIST
-
+from net.messages import TASK_REQUEST, TASK_RESULT, Message
 from net.udp_node import start_udp_node
 
 app = typer.Typer(help="MeshWeaver P2P Task Broker")
@@ -65,7 +63,6 @@ def select_seed_destination(protocol, seed):
     current_node_id = getattr(protocol, "node_id", None)
 
     peers = registry.items() if isinstance(registry, dict) else []
-
     seed_is_known = False
 
     for key, peer in peers:
@@ -252,7 +249,8 @@ def submit(
     task_id = str(uuid.uuid4())
 
     try:
-        task = Task(
+        # Constructing Task validates the task name and its arguments.
+        Task(
             task_name,
             args=tuple(task_args),
             kwargs=task_kwargs,
