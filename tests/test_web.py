@@ -33,7 +33,7 @@ def test_live_state_endpoint_returns_snapshot():
 
 
 def test_unknown_path_returns_404():
-    server = create_dashboard_server(lambda: {}, port=0)
+    server = create_dashboard_server(dict, port=0)
     try:
         host, port = server.server_address
         try:
