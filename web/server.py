@@ -1,7 +1,11 @@
 """Local HTTP server for the live MeshWeaver dashboard."""
+
 from __future__ import annotations
 
+import hmac
 import json
+import math
+import secrets
 import threading
 import time
 from collections.abc import Callable
@@ -15,7 +19,33 @@ INDEX_FILE = WEB_DIR / "static" / "index.html"
 HOST = "127.0.0.1"
 PORT = 8765
 SSE_INTERVAL_SECONDS = 2
-MAX_REQUEST_BYTES = 64 * 1024
+MAX_REQUEST_BYTES = 4096
+ALLOWED_TASKS = frozenset({"add", "multiply"})
+
+
+def _reject_json_constant(value: str) -> None:
+    """Reject non-standard JSON constants such as NaN and Infinity."""
+    raise ValueError(f"Invalid JSON constant: {value}")
+
+
+def _validate_json_value(value: Any) -> bool:
+    """Allow only finite JSON-compatible values."""
+    if value is None or isinstance(value, (str, bool, int)):
+        return True
+
+    if isinstance(value, float):
+        return math.isfinite(value)
+
+    if isinstance(value, list):
+        return all(_validate_json_value(item) for item in value)
+
+    if isinstance(value, dict):
+        return all(
+            isinstance(key, str) and _validate_json_value(item)
+            for key, item in value.items()
+        )
+
+    return False
 
 
 def create_dashboard_server(
@@ -23,15 +53,19 @@ def create_dashboard_server(
     host: str = HOST,
     port: int = PORT,
     task_submitter: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
+    *,
+    submit_token: str | None = None,
 ) -> ThreadingHTTPServer:
-    """Create a dashboard backed by live runtime state and optional task submission."""
+    """Create a dashboard with optional token-protected demo task submission."""
+    token = submit_token if submit_token is not None else secrets.token_urlsafe(32)
+
+    if not isinstance(token, str) or not token:
+        raise ValueError("submit_token must be a non-empty string")
 
     class DashboardHandler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
 
-        def send_body(
-            self, status: int, content_type: str, body: bytes
-        ) -> None:
+        def send_body(self, status: int, content_type: str, body: bytes) -> None:
             self.send_response(status)
             self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(body)))
@@ -41,7 +75,7 @@ def create_dashboard_server(
             self.wfile.write(body)
 
         def send_json(self, status: int, payload: dict[str, Any]) -> None:
-            body = json.dumps(payload).encode("utf-8")
+            body = json.dumps(payload, allow_nan=False).encode("utf-8")
             self.send_body(status, "application/json; charset=utf-8", body)
 
         def send_json_error(self, status: int, message: str) -> None:
@@ -80,7 +114,7 @@ def create_dashboard_server(
             self.send_body(404, "text/plain; charset=utf-8", b"404 Not Found")
 
         def do_POST(self) -> None:
-            if urlsplit(self.path).path != "/api/tasks":
+            if urlsplit(self.path).path != "/api/submit":
                 self.send_json_error(404, "Unknown endpoint.")
                 return
 
@@ -90,23 +124,47 @@ def create_dashboard_server(
                 )
                 return
 
-            try:
-                length = int(self.headers.get("Content-Length", "0"))
-            except ValueError:
+            supplied_token = self.headers.get("X-Token", "")
+            if not hmac.compare_digest(supplied_token, token):
+                self.send_json_error(403, "Invalid or missing submission token.")
+                return
+
+            content_lengths = self.headers.get_all("Content-Length", [])
+            if len(content_lengths) != 1:
+                self.send_json_error(400, "Exactly one Content-Length is required.")
+                return
+
+            raw_length = content_lengths[0]
+            if not raw_length.isascii() or not raw_length.isdecimal():
                 self.send_json_error(400, "Invalid Content-Length.")
                 return
 
-            if length <= 0 or length > MAX_REQUEST_BYTES:
-                self.send_json_error(413, "Request body must be 1–65536 bytes.")
+            length = int(raw_length)
+            if length <= 0:
+                self.send_json_error(400, "Request body must not be empty.")
                 return
 
-            if "application/json" not in self.headers.get("Content-Type", ""):
+            if length > MAX_REQUEST_BYTES:
+                self.send_json_error(413, "Request body must not exceed 4096 bytes.")
+                return
+
+            content_type = self.headers.get("Content-Type", "")
+            media_type = content_type.split(";", 1)[0].strip().lower()
+            if media_type != "application/json":
                 self.send_json_error(415, "Content-Type must be application/json.")
                 return
 
             try:
-                payload = json.loads(self.rfile.read(length))
-            except (json.JSONDecodeError, UnicodeDecodeError):
+                raw_body = self.rfile.read(length)
+                if len(raw_body) != length:
+                    self.send_json_error(400, "Incomplete request body.")
+                    return
+
+                payload = json.loads(
+                    raw_body.decode("utf-8"),
+                    parse_constant=_reject_json_constant,
+                )
+            except (json.JSONDecodeError, UnicodeDecodeError, ValueError):
                 self.send_json_error(400, "Request body must contain valid JSON.")
                 return
 
@@ -114,8 +172,41 @@ def create_dashboard_server(
                 self.send_json_error(400, "JSON body must be an object.")
                 return
 
+            task_name = payload.get("name")
+            if not isinstance(task_name, str) or task_name not in ALLOWED_TASKS:
+                self.send_json_error(
+                    400, "Task name must be one of the approved demo tasks."
+                )
+                return
+
+            args = payload.get("args", [])
+            if not isinstance(args, list):
+                self.send_json_error(400, "'args' must be a JSON array.")
+                return
+
+            kwargs = payload.get("kwargs", {})
+            if not isinstance(kwargs, dict):
+                self.send_json_error(400, "'kwargs' must be a JSON object.")
+                return
+
+            if not all(isinstance(key, str) for key in kwargs):
+                self.send_json_error(400, "'kwargs' keys must be strings.")
+                return
+
+            if not _validate_json_value(args) or not _validate_json_value(kwargs):
+                self.send_json_error(
+                    400, "Task arguments must contain finite JSON values only."
+                )
+                return
+
+            safe_payload = {
+                "name": task_name,
+                "args": args,
+                "kwargs": kwargs,
+            }
+
             try:
-                result = task_submitter(payload)
+                result = task_submitter(safe_payload)
             except (ValueError, TypeError) as exc:
                 self.send_json_error(400, str(exc))
                 return
@@ -125,7 +216,7 @@ def create_dashboard_server(
                 )
                 return
 
-            self.send_json(200, result)
+            self.send_json(202, result)
 
         def handle_event_stream(self) -> None:
             try:
@@ -146,17 +237,16 @@ def create_dashboard_server(
             try:
                 while True:
                     state = snapshot_provider()
-                    payload = json.dumps(state, separators=(",", ":"))
-                    self.wfile.write(f"data: {payload}\n\n".encode())
+                    payload = json.dumps(state, separators=(",", ":"), allow_nan=False)
+                    self.wfile.write(f"data: {payload}\n\n".encode("utf-8"))
                     self.wfile.flush()
                     time.sleep(SSE_INTERVAL_SECONDS)
             except (
                 BrokenPipeError,
                 ConnectionResetError,
                 ConnectionAbortedError,
+                OSError,
             ):
-                pass
-            except OSError:
                 pass
 
         def log_message(self, format_string: str, *args: object) -> None:
@@ -164,6 +254,8 @@ def create_dashboard_server(
 
     server = ThreadingHTTPServer((host, port), DashboardHandler)
     server.daemon_threads = True
+    server.submit_token = token
+
     thread = threading.Thread(
         target=server.serve_forever,
         name="meshweaver-dashboard",
@@ -175,9 +267,7 @@ def create_dashboard_server(
 
 def main() -> None:
     """Standalone server entry point is intentionally disabled without runtime."""
-    raise SystemExit(
-        "Start the live dashboard with: python -m cli.main start --web"
-    )
+    raise SystemExit("Start the live dashboard with: python -m cli.main start --web")
 
 
 if __name__ == "__main__":

@@ -17,6 +17,8 @@ from net.udp_node import start_udp_node
 
 app = typer.Typer(help="MeshWeaver P2P Task Broker")
 
+WEB_ALLOWED_TASKS = frozenset({"add", "multiply"})
+
 
 def _create_engine():
     """Create an execution engine with built-in tasks."""
@@ -40,9 +42,9 @@ def _peer_address(peer, key=None):
 
     if address is None:
         host = getattr(peer, "host", None)
-        port = getattr(peer, "port", None)
-        if host is not None and port is not None:
-            address = (host, port)
+        peer_port = getattr(peer, "port", None)
+        if host is not None and peer_port is not None:
+            address = (host, peer_port)
 
     if address is None and isinstance(key, tuple) and len(key) == 2:
         address = key
@@ -173,6 +175,40 @@ def start(
                 from web.server import create_dashboard_server
                 from web.snapshot import build_snapshot
 
+                def submit_demo(payload):
+                    """Validate and queue an allowlisted dashboard demo task."""
+                    task_name = payload["name"]
+                    args = payload.get("args", [])
+                    kwargs = payload.get("kwargs", {})
+
+                    if (
+                        not isinstance(task_name, str)
+                        or task_name not in WEB_ALLOWED_TASKS
+                    ):
+                        raise ValueError("Only add and multiply are allowed.")
+
+                    if not isinstance(args, list):
+                        raise TypeError("'args' must be a JSON array.")
+
+                    if not isinstance(kwargs, dict):
+                        raise TypeError("'kwargs' must be a JSON object.")
+
+                    if not all(isinstance(key, str) for key in kwargs):
+                        raise TypeError("'kwargs' keys must be strings.")
+
+                    task = Task(
+                        task_name,
+                        args=tuple(args),
+                        kwargs=kwargs,
+                    )
+
+                    engine.submit_task(task)
+
+                    return {
+                        "task_id": task.task_id,
+                        "state": "PENDING",
+                    }
+
                 dashboard = create_dashboard_server(
                     host=host,
                     port=web_port,
@@ -184,8 +220,12 @@ def start(
                         port=port,
                         task_registry=getattr(engine, "task_registry", None),
                     ),
+                    task_submitter=submit_demo,
                 )
+
                 typer.echo(f"Dashboard: http://{host}:{web_port}/")
+                typer.echo(f"Submission token: {dashboard.submit_token}")
+                typer.echo("Use the token in the X-Token header for POST /api/submit.")
 
             await asyncio.Event().wait()
 
@@ -197,6 +237,7 @@ def start(
                     dashboard.close()
 
             transport.close()
+            engine.shutdown(wait=False, cancel_futures=True)
 
     try:
         asyncio.run(run_node())
@@ -253,11 +294,11 @@ def submit(
     task_id = str(uuid.uuid4())
 
     try:
-        # Constructing Task validates the task name and its arguments.
         Task(
             task_name,
             args=tuple(task_args),
             kwargs=task_kwargs,
+            task_id=task_id,
         )
     except (TypeError, ValueError) as exc:
         typer.echo(f"Invalid task: {exc}")
