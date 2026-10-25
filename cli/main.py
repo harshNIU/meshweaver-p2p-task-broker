@@ -181,14 +181,20 @@ def start(
                     args = payload.get("args", [])
                     kwargs = payload.get("kwargs", {})
 
-                    if task_name not in WEB_ALLOWED_TASKS:
+                    if (
+                        not isinstance(task_name, str)
+                        or task_name not in WEB_ALLOWED_TASKS
+                    ):
                         raise ValueError("Only add and multiply are allowed.")
 
                     if not isinstance(args, list):
-                        raise ValueError("'args' must be a JSON array.")
+                        raise TypeError("'args' must be a JSON array.")
 
                     if not isinstance(kwargs, dict):
-                        raise ValueError("'kwargs' must be a JSON object.")
+                        raise TypeError("'kwargs' must be a JSON object.")
+
+                    if not all(isinstance(key, str) for key in kwargs):
+                        raise TypeError("'kwargs' keys must be strings.")
 
                     task = Task(
                         task_name,
