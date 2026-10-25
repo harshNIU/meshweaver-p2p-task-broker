@@ -2,14 +2,14 @@
 from __future__ import annotations
 
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 
 def _utc_timestamp(epoch_seconds: float | None = None) -> str:
     if epoch_seconds is None:
         epoch_seconds = time.time()
-    return datetime.fromtimestamp(epoch_seconds, tz=timezone.utc).isoformat()
+    return datetime.fromtimestamp(epoch_seconds, tz=UTC).isoformat()
 
 
 def build_snapshot(

@@ -4,9 +4,10 @@ from __future__ import annotations
 import json
 import threading
 import time
+from collections.abc import Callable
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 from urllib.parse import urlsplit
 
 WEB_DIR = Path(__file__).resolve().parent
@@ -18,7 +19,7 @@ MAX_REQUEST_BYTES = 64 * 1024
 
 
 def create_dashboard_server(
-    snapshot_provider: Callable[[], dict],
+    snapshot_provider: Callable[[], dict[str, Any]],
     host: str = HOST,
     port: int = PORT,
     task_submitter: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
@@ -28,7 +29,9 @@ def create_dashboard_server(
     class DashboardHandler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
 
-        def send_body(self, status: int, content_type: str, body: bytes) -> None:
+        def send_body(
+            self, status: int, content_type: str, body: bytes
+        ) -> None:
             self.send_response(status)
             self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(body)))
@@ -57,13 +60,14 @@ def create_dashboard_server(
                         b"Dashboard page could not be loaded",
                     )
                     return
+
                 self.send_body(200, "text/html; charset=utf-8", body)
                 return
 
             if path == "/api/state":
                 try:
                     self.send_json(200, snapshot_provider())
-                except Exception as exc:
+                except Exception as exc:  # noqa: BLE001
                     self.send_json_error(
                         500, f"Live snapshot unavailable: {type(exc).__name__}"
                     )
@@ -115,7 +119,7 @@ def create_dashboard_server(
             except (ValueError, TypeError) as exc:
                 self.send_json_error(400, str(exc))
                 return
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001
                 self.send_json_error(
                     500, f"Task submission failed: {type(exc).__name__}"
                 )
@@ -126,7 +130,7 @@ def create_dashboard_server(
         def handle_event_stream(self) -> None:
             try:
                 snapshot_provider()
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001
                 self.send_json_error(
                     500, f"Live snapshot unavailable: {type(exc).__name__}"
                 )
@@ -143,10 +147,14 @@ def create_dashboard_server(
                 while True:
                     state = snapshot_provider()
                     payload = json.dumps(state, separators=(",", ":"))
-                    self.wfile.write(f"data: {payload}\n\n".encode("utf-8"))
+                    self.wfile.write(f"data: {payload}\n\n".encode())
                     self.wfile.flush()
                     time.sleep(SSE_INTERVAL_SECONDS)
-            except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            except (
+                BrokenPipeError,
+                ConnectionResetError,
+                ConnectionAbortedError,
+            ):
                 pass
             except OSError:
                 pass
@@ -167,7 +175,9 @@ def create_dashboard_server(
 
 def main() -> None:
     """Standalone server entry point is intentionally disabled without runtime."""
-    raise SystemExit("Start the live dashboard with: python -m cli.main start --web")
+    raise SystemExit(
+        "Start the live dashboard with: python -m cli.main start --web"
+    )
 
 
 if __name__ == "__main__":
