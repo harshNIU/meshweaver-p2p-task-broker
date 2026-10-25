@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MeshWeaver | Live Network Dashboard</title>
+<style>
+:root{color-scheme:dark;font-family:Inter,"Segoe UI",Arial,sans-serif;background:#0b1120;color:#e5edf9}
+*{box-sizing:border-box}body{margin:0;background:radial-gradient(ellipse at top left,#142342 0,transparent 45%),#0b1120}
+.container{max-width:1200px;margin:auto;padding:30px 22px 50px}
+header{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:16px;margin-bottom:24px}
+.brand{display:flex;align-items:center;gap:13px}.logo{display:grid;place-items:center;width:48px;height:48px;border-radius:14px;background:#1d4ed8;font-size:25px}
+h1,h2,p{margin-top:0}h1{margin-bottom:5px;font-size:clamp(23px,4vw,32px)}h2{margin-bottom:0;font-size:18px}.muted,.count{color:#93a4bf}
+.connection{display:flex;align-items:center;gap:9px;padding:10px 14px;border:1px solid #263750;border-radius:30px;background:#111c30;font-size:13px}
+.dot{width:9px;height:9px;border-radius:50%;background:#f59e0b}.dot.connected{background:#34d399}.dot.disconnected{background:#fb7185}
+.notice{margin-bottom:22px;padding:13px 16px;border:1px solid #265b4a;border-radius:10px;background:#10372c;color:#a7f3d0;font-size:13px}
+.summary{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:15px;margin-bottom:22px}
+.card,.panel{border:1px solid #263750;border-radius:14px;background:#111c30e8}.card{padding:19px}.card-label{margin-bottom:12px;color:#93a4bf;font-size:13px}.card-value{font-size:30px;font-weight:700}
+.panel{margin-bottom:22px;padding:20px;min-width:0}.panel-heading{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;margin-bottom:17px}
+.table-wrap{overflow-x:auto}table{width:100%;border-collapse:collapse;text-align:left;white-space:nowrap;font-size:13px}
+th{padding:12px 13px;color:#93a4bf;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;border-bottom:1px solid #263750}
+td{padding:15px 13px;border-bottom:1px solid #26375099}tbody tr:last-child td{border-bottom:0}
+.pill{display:inline-block;padding:5px 9px;border-radius:20px;font-size:11px;font-weight:700}
+.alive,.completed{background:#064e3b;color:#6ee7b7}.suspect,.pending{background:#78350f;color:#fcd34d}.dead,.failed{background:#7f1d1d;color:#fca5a5}.running{background:#1e3a8a;color:#93c5fd}
+.bar{display:inline-block;width:75px;height:6px;margin-right:8px;overflow:hidden;border-radius:6px;background:#29374d;vertical-align:middle}.bar-fill{height:100%;border-radius:6px;background:#60a5fa}
+.events{display:flex;flex-direction:column}.event{display:grid;grid-template-columns:170px 75px minmax(0,1fr);gap:12px;padding:13px 0;border-bottom:1px solid #26375099;font-size:13px}.event:last-child{border-bottom:0}
+.event-time{color:#93a4bf}.level-info{color:#93c5fd}.level-warning{color:#fcd34d}.level-error{color:#fca5a5}
+.empty{padding:22px;color:#93a4bf;text-align:center}footer{color:#71829c;text-align:center;font-size:12px}
+@media(max-width:760px){.summary{grid-template-columns:repeat(2,minmax(0,1fr))}.container{padding:22px 13px 35px}.panel{padding:14px}.event{grid-template-columns:120px 60px minmax(0,1fr);gap:8px;font-size:12px}}
+</style>
+</head>
+<body><div class="container">
+<header><div class="brand"><div class="logo" aria-hidden="true">⌘</div><div><h1>MeshWeaver</h1><p class="muted" style="margin-bottom:0">Peer-to-peer task broker · Live network overview</p></div></div>
+<div class="connection" role="status" aria-live="polite"><span id="connectionDot" class="dot"></span><span id="connectionText">Connecting to runtime…</span></div></header>
+<div class="notice">LIVE RUNTIME — data is read from the running MeshWeaver process. Missing telemetry is shown as unavailable; no sample nodes or tasks are inserted.</div>
+<section class="summary" aria-label="Summary">
+<div class="card"><div class="card-label">Observed nodes</div><div class="card-value" id="totalNodes">—</div></div>
+<div class="card"><div class="card-label">Alive nodes</div><div class="card-value" id="aliveNodes">—</div></div>
+<div class="card"><div class="card-label">Actual tasks</div><div class="card-value" id="totalTasks">—</div></div>
+<div class="card"><div class="card-label">Running tasks</div><div class="card-value" id="runningTasks">—</div></div>
+</section>
+<section class="panel"><div class="panel-heading"><h2>Node monitor</h2><span id="nodeCount" class="count">0 nodes</span></div><div class="table-wrap"><table><thead><tr><th>Node</th><th>Address</th><th>CPU</th><th>RAM</th><th>Last seen</th><th>Status</th></tr></thead><tbody id="nodeRows"><tr><td colspan="6" class="empty">Waiting for runtime data…</td></tr></tbody></table></div></section>
+<section class="panel"><div class="panel-heading"><h2>Task monitor</h2><span id="taskCount" class="count">0 tasks</span></div><div class="table-wrap"><table><thead><tr><th>Task ID</th><th>Name</th><th>Assigned node</th><th>Attempt</th><th>Status</th></tr></thead><tbody id="taskRows"><tr><td colspan="5" class="empty">No task lifecycle data received.</td></tr></tbody></table></div></section>
+<section class="panel"><div class="panel-heading"><h2>Recent network events</h2><span class="count">Observed messages only</span></div><div id="eventLog" class="events"><div class="empty">Waiting for network events…</div></div></section>
+<footer>MeshWeaver optional web dashboard · Live local runtime</footer>
+</div>
+<script>
+const el={dot:document.getElementById("connectionDot"),connection:document.getElementById("connectionText"),totalNodes:document.getElementById("totalNodes"),aliveNodes:document.getElementById("aliveNodes"),totalTasks:document.getElementById("totalTasks"),runningTasks:document.getElementById("runningTasks"),nodeCount:document.getElementById("nodeCount"),taskCount:document.getElementById("taskCount"),nodeRows:document.getElementById("nodeRows"),taskRows:document.getElementById("taskRows"),eventLog:document.getElementById("eventLog")};
+function cell(value){const td=document.createElement("td");td.textContent=value==null||value===""?"—":String(value);return td}
+function statusCell(value){const td=document.createElement("td"),badge=document.createElement("span"),status=String(value||"UNKNOWN").toUpperCase();badge.className="pill "+status.toLowerCase();badge.textContent=status;td.appendChild(badge);return td}
+function usageCell(value){const td=document.createElement("td");if(value==null||!Number.isFinite(Number(value))){td.textContent="Unavailable";return td}const n=Math.max(0,Math.min(100,Number(value))),bar=document.createElement("span"),fill=document.createElement("span"),label=document.createElement("span");bar.className="bar";fill.className="bar-fill";fill.style.width=n+"%";bar.appendChild(fill);label.textContent=n.toFixed(1)+"%";td.append(bar,label);return td}
+function emptyRow(span,message){const tr=document.createElement("tr"),td=document.createElement("td");td.colSpan=span;td.className="empty";td.textContent=message;tr.appendChild(td);return tr}
+function renderNodes(nodes){el.nodeRows.replaceChildren();el.nodeCount.textContent=nodes.length+(nodes.length===1?" node":" nodes");if(!nodes.length){el.nodeRows.appendChild(emptyRow(6,"No peers have been observed yet."));return}for(const n of nodes){const tr=document.createElement("tr");tr.append(cell(n.node_id),cell(n.host+":"+n.port),usageCell(n.cpu),usageCell(n.ram),cell(n.last_seen),statusCell(n.state));el.nodeRows.appendChild(tr)}}
+function renderTasks(tasks){el.taskRows.replaceChildren();el.taskCount.textContent=tasks.length+(tasks.length===1?" task":" tasks");if(!tasks.length){el.taskRows.appendChild(emptyRow(5,"No real tasks have been registered with the dashboard runtime."));return}for(const t of tasks){const tr=document.createElement("tr");tr.append(cell(t.task_id),cell(t.name),cell(t.assigned_to),cell(t.attempt),statusCell(t.status));el.taskRows.appendChild(tr)}}
+function renderEvents(events){el.eventLog.replaceChildren();if(!events.length){const d=document.createElement("div");d.className="empty";d.textContent="No network messages observed yet.";el.eventLog.appendChild(d);return}for(const e of events.slice().reverse()){const row=document.createElement("div"),time=document.createElement("span"),level=document.createElement("span"),msg=document.createElement("span");row.className="event";time.className="event-time";level.className="level-"+String(e.level||"info").toLowerCase();time.textContent=e.timestamp||"—";level.textContent=e.level||"INFO";msg.textContent=e.message||"";row.append(time,level,msg);el.eventLog.appendChild(row)}}
+function renderState(s){const nodes=Array.isArray(s.nodes)?s.nodes:[],tasks=Array.isArray(s.tasks)?s.tasks:[],events=Array.isArray(s.events)?s.events:[];el.totalNodes.textContent=nodes.length;el.aliveNodes.textContent=nodes.filter(n=>String(n.state).toUpperCase()==="ALIVE").length;el.totalTasks.textContent=tasks.length;el.runningTasks.textContent=tasks.filter(t=>String(t.status).toUpperCase()==="RUNNING").length;renderNodes(nodes);renderTasks(tasks);renderEvents(events)}
+function connection(ok,message){el.dot.className="dot "+(ok?"connected":"disconnected");el.connection.textContent=message}
+async function initial(){const r=await fetch("/api/state",{cache:"no-store"});if(!r.ok)throw Error("HTTP "+r.status);renderState(await r.json())}
+async function start(){try{await initial();connection(true,"Live runtime connected")}catch(e){connection(false,"Runtime data unavailable");console.error(e)}if(!("EventSource"in window)){connection(false,"Browser SSE unsupported");return}const stream=new EventSource("/api/events");stream.onopen=()=>connection(true,"Live runtime connected");stream.onmessage=e=>{try{renderState(JSON.parse(e.data));connection(true,"Live runtime connected")}catch(err){console.error("Invalid snapshot",err)}};stream.onerror=()=>connection(false,"Reconnecting to runtime…")}
+start();
+</script></body></html>
