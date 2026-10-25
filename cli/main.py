@@ -1,4 +1,3 @@
-
 """MeshWeaver CLI for starting nodes and submitting tasks."""
 
 import asyncio
