@@ -1,175 +1,173 @@
-"""Local HTTP server for the MeshWeaver mock web dashboard.
-
-This first version serves a simple page and a read-only mock-state API.
-It uses only Python's standard library.
-"""
+"""Local HTTP server for the live MeshWeaver dashboard."""
+from __future__ import annotations
 
 import json
+import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from typing import Any, Callable
 from urllib.parse import urlsplit
 
 WEB_DIR = Path(__file__).resolve().parent
-STATE_FILE = WEB_DIR / "mock_state.json"
+INDEX_FILE = WEB_DIR / "static" / "index.html"
 HOST = "127.0.0.1"
 PORT = 8765
-
-STARTER_PAGE = """<!doctype html>
-<html lang="en">
-<head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>MeshWeaver Dashboard</title>
-    <style>
-        body {
-            max-width: 900px;
-            margin: 40px auto;
-            padding: 0 20px;
-            font-family: Arial, sans-serif;
-            background: #f4f7fb;
-            color: #172b4d;
-        }
-        main {
-            padding: 24px;
-            background: white;
-            border-radius: 12px;
-        }
-        h1 { margin-top: 0; }
-        .notice { color: #775600; }
-        button {
-            padding: 10px 16px;
-            border: 0;
-            border-radius: 6px;
-            background: #175cd3;
-            color: white;
-            cursor: pointer;
-        }
-        pre {
-            padding: 16px;
-            overflow-x: auto;
-            background: #edf2f7;
-            border-radius: 8px;
-        }
-    </style>
-</head>
-<body>
-    <main>
-        <h1>MeshWeaver Dashboard</h1>
-        <p class="notice">
-            WEB 1 starter page — the information below is mock data,
-            not live peer information.
-        </p>
-        <p>State API: <code>/api/state</code></p>
-        <button id="refresh">Refresh mock state</button>
-        <p id="status">Loading state...</p>
-        <pre id="state">Waiting for data...</pre>
-    </main>
-    <script>
-        const statusElement = document.getElementById("status");
-        const stateElement = document.getElementById("state");
-        const refreshButton = document.getElementById("refresh");
-
-        async function loadState() {
-            statusElement.textContent = "Loading mock state...";
-
-            try {
-                const response = await fetch("/api/state", {
-                    cache: "no-store"
-                });
-
-                if (!response.ok) {
-                    throw new Error("HTTP status " + response.status);
-                }
-
-                const state = await response.json();
-                stateElement.textContent = JSON.stringify(state, null, 2);
-                statusElement.textContent =
-                    "Loaded successfully. Data mode: " + state.mode;
-            } catch (error) {
-                statusElement.textContent =
-                    "Could not load state: " + error.message;
-            }
-        }
-
-        refreshButton.addEventListener("click", loadState);
-        loadState();
-    </script>
-</body>
-</html>
-"""
+SSE_INTERVAL_SECONDS = 2
+MAX_REQUEST_BYTES = 64 * 1024
 
 
-class DashboardHandler(BaseHTTPRequestHandler):
-    """Handle the dashboard page and read-only state endpoint."""
+def create_dashboard_server(
+    snapshot_provider: Callable[[], dict],
+    host: str = HOST,
+    port: int = PORT,
+    task_submitter: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
+) -> ThreadingHTTPServer:
+    """Create a dashboard backed by live runtime state and optional task submission."""
 
-    def send_body(self, status, content_type, body):
-        """Send a complete HTTP response."""
-        self.send_response(status)
-        self.send_header("Content-Type", content_type)
-        self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-store")
-        self.send_header("X-Content-Type-Options", "nosniff")
-        self.end_headers()
-        self.wfile.write(body)
+    class DashboardHandler(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
 
-    def do_GET(self):
-        """Serve only the dashboard page and mock-state endpoint."""
-        path = urlsplit(self.path).path
+        def send_body(self, status: int, content_type: str, body: bytes) -> None:
+            self.send_response(status)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.end_headers()
+            self.wfile.write(body)
 
-        if path in ("/", "/index.html"):
-            body = STARTER_PAGE.encode("utf-8")
-            self.send_body(
-                200,
-                "text/html; charset=utf-8",
-                body,
-            )
-            return
+        def send_json(self, status: int, payload: dict[str, Any]) -> None:
+            body = json.dumps(payload).encode("utf-8")
+            self.send_body(status, "application/json; charset=utf-8", body)
 
-        if path == "/api/state":
+        def send_json_error(self, status: int, message: str) -> None:
+            self.send_json(status, {"error": message})
+
+        def do_GET(self) -> None:
+            path = urlsplit(self.path).path
+
+            if path in ("/", "/index.html", "/static/index.html"):
+                try:
+                    body = INDEX_FILE.read_bytes()
+                except OSError:
+                    self.send_body(
+                        500,
+                        "text/plain; charset=utf-8",
+                        b"Dashboard page could not be loaded",
+                    )
+                    return
+                self.send_body(200, "text/html; charset=utf-8", body)
+                return
+
+            if path == "/api/state":
+                try:
+                    self.send_json(200, snapshot_provider())
+                except Exception as exc:
+                    self.send_json_error(
+                        500, f"Live snapshot unavailable: {type(exc).__name__}"
+                    )
+                return
+
+            if path == "/api/events":
+                self.handle_event_stream()
+                return
+
+            self.send_body(404, "text/plain; charset=utf-8", b"404 Not Found")
+
+        def do_POST(self) -> None:
+            if urlsplit(self.path).path != "/api/tasks":
+                self.send_json_error(404, "Unknown endpoint.")
+                return
+
+            if task_submitter is None:
+                self.send_json_error(
+                    503, "Task submission is not enabled for this runtime."
+                )
+                return
+
             try:
-                with STATE_FILE.open("r", encoding="utf-8") as state_file:
-                    state = json.load(state_file)
+                length = int(self.headers.get("Content-Length", "0"))
+            except ValueError:
+                self.send_json_error(400, "Invalid Content-Length.")
+                return
 
-                body = json.dumps(state, indent=2).encode("utf-8")
-                self.send_body(
-                    200,
-                    "application/json; charset=utf-8",
-                    body,
+            if length <= 0 or length > MAX_REQUEST_BYTES:
+                self.send_json_error(413, "Request body must be 1–65536 bytes.")
+                return
+
+            if "application/json" not in self.headers.get("Content-Type", ""):
+                self.send_json_error(415, "Content-Type must be application/json.")
+                return
+
+            try:
+                payload = json.loads(self.rfile.read(length))
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                self.send_json_error(400, "Request body must contain valid JSON.")
+                return
+
+            if not isinstance(payload, dict):
+                self.send_json_error(400, "JSON body must be an object.")
+                return
+
+            try:
+                result = task_submitter(payload)
+            except (ValueError, TypeError) as exc:
+                self.send_json_error(400, str(exc))
+                return
+            except Exception as exc:
+                self.send_json_error(
+                    500, f"Task submission failed: {type(exc).__name__}"
                 )
-            except (OSError, json.JSONDecodeError):
-                error_body = json.dumps(
-                    {"error": "Mock state could not be loaded"}
-                ).encode("utf-8")
-                self.send_body(
-                    500,
-                    "application/json; charset=utf-8",
-                    error_body,
+                return
+
+            self.send_json(200, result)
+
+        def handle_event_stream(self) -> None:
+            try:
+                snapshot_provider()
+            except Exception as exc:
+                self.send_json_error(
+                    500, f"Live snapshot unavailable: {type(exc).__name__}"
                 )
-            return
+                return
 
-        body = b"404 Not Found"
-        self.send_body(404, "text/plain; charset=utf-8", body)
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+            self.send_header("Cache-Control", "no-cache, no-transform")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Connection", "keep-alive")
+            self.end_headers()
 
-    def log_message(self, format_string, *args):
-        """Keep standard HTTP request logging enabled."""
-        super().log_message(format_string, *args)
+            try:
+                while True:
+                    state = snapshot_provider()
+                    payload = json.dumps(state, separators=(",", ":"))
+                    self.wfile.write(f"data: {payload}\n\n".encode("utf-8"))
+                    self.wfile.flush()
+                    time.sleep(SSE_INTERVAL_SECONDS)
+            except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+                pass
+            except OSError:
+                pass
+
+        def log_message(self, format_string: str, *args: object) -> None:
+            super().log_message(format_string, *args)
+
+    server = ThreadingHTTPServer((host, port), DashboardHandler)
+    server.daemon_threads = True
+    thread = threading.Thread(
+        target=server.serve_forever,
+        name="meshweaver-dashboard",
+        daemon=True,
+    )
+    thread.start()
+    return server
 
 
-def main():
-    """Start the local dashboard server."""
-    server = ThreadingHTTPServer((HOST, PORT), DashboardHandler)
-
-    print(f"MeshWeaver dashboard: http://{HOST}:{PORT}/")
-    print(f"Mock state API:       http://{HOST}:{PORT}/api/state")
-    print("Data source: mock_state.json")
-    print("Press Ctrl+C to stop the server.")
-
-    try:
-        server.serve_forever()
-    except KeyboardInterrupt:
-        print("\nStopping MeshWeaver dashboard...")
-    finally:
-        server.server_close()
+def main() -> None:
+    """Standalone server entry point is intentionally disabled without runtime."""
+    raise SystemExit("Start the live dashboard with: python -m cli.main start --web")
 
 
 if __name__ == "__main__":
