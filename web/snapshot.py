@@ -3,17 +3,17 @@
 from __future__ import annotations
 
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 
-def _iso_timestamp(value: float | int | None) -> str | None:
+def _iso_timestamp(value: float | None) -> str | None:
     """Convert a Unix timestamp to an ISO-8601 UTC timestamp."""
     if value is None:
         return None
 
     try:
-        return datetime.fromtimestamp(float(value), tz=timezone.utc).isoformat()
+        return datetime.fromtimestamp(float(value), tz=UTC).isoformat()
     except (OverflowError, OSError, TypeError, ValueError):
         return None
 

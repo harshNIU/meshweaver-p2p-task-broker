@@ -11,6 +11,7 @@ import typer
 from execution.builtin_tasks import register_builtin_tasks
 from execution.engine import ExecutionEngine
 from execution.models import Task
+from execution.task_registry import TaskRegistry
 from net.bootstrap import parse_seed_address, request_peer_list
 from net.messages import TASK_REQUEST, TASK_RESULT, Message
 from net.udp_node import start_udp_node
@@ -21,8 +22,9 @@ WEB_ALLOWED_TASKS = frozenset({"add", "multiply"})
 
 
 def _create_engine():
-    """Create an execution engine with built-in tasks."""
-    engine = ExecutionEngine()
+    """Create an execution engine with built-in tasks and lifecycle tracking."""
+    task_registry = TaskRegistry()
+    engine = ExecutionEngine(task_registry=task_registry)
     register_builtin_tasks(engine)
     return engine
 
@@ -218,7 +220,7 @@ def start(
                         node_id=node_id or f"node-{port}",
                         host=host,
                         port=port,
-                        task_registry=getattr(engine, "task_registry", None),
+                        task_registry=engine.task_registry,
                     ),
                     task_submitter=submit_demo,
                 )

@@ -238,7 +238,7 @@ def create_dashboard_server(
                 while True:
                     state = snapshot_provider()
                     payload = json.dumps(state, separators=(",", ":"), allow_nan=False)
-                    self.wfile.write(f"data: {payload}\n\n".encode("utf-8"))
+                    self.wfile.write(f"data: {payload}\n\n".encode())
                     self.wfile.flush()
                     time.sleep(SSE_INTERVAL_SECONDS)
             except (
