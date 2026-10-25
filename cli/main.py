@@ -1,267 +1,341 @@
-"""Command-line interface for the MeshWeaver peer-to-peer task broker."""
+
+"""MeshWeaver CLI for starting nodes and submitting tasks."""
 
 import asyncio
 import json
 import math
-from typing import Any
-from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
+import time
+import uuid
 
 import typer
-from rich.console import Console
 
+from execution.builtin_tasks import register_builtin_tasks
 from execution.engine import ExecutionEngine
 from execution.models import Task
-from execution.task_registry import TaskRegistry
+from net.bootstrap import parse_seed_address, request_peer_list
+from net.messages import Message, TASK_REQUEST, TASK_RESULT, PEER_LIST
+
 from net.udp_node import start_udp_node
 
-app = typer.Typer(help="MeshWeaver peer-to-peer task broker CLI")
-console = Console()
+app = typer.Typer(help="MeshWeaver P2P Task Broker")
 
 
-def _add_numbers(*args: Any) -> int | float:
-    """Add numeric arguments."""
-    if not args:
-        raise ValueError("add requires at least one numeric argument.")
-    if any(
-        isinstance(value, bool) or not isinstance(value, (int, float)) for value in args
-    ):
-        raise ValueError("add accepts only numeric arguments.")
-
-    result = sum(args)
-    if not math.isfinite(result):
-        raise ValueError("Result must be finite.")
-    return result
-
-
-def _multiply_numbers(*args: Any) -> int | float:
-    """Multiply numeric arguments."""
-    if not args:
-        raise ValueError("multiply requires at least one numeric argument.")
-    if any(
-        isinstance(value, bool) or not isinstance(value, (int, float)) for value in args
-    ):
-        raise ValueError("multiply accepts only numeric arguments.")
-
-    result: int | float = 1
-    for value in args:
-        result *= value
-
-    if not math.isfinite(result):
-        raise ValueError("Result must be finite.")
-    return result
-
-
-def _create_engine(registry: TaskRegistry) -> ExecutionEngine:
-    """Create an engine with explicitly registered built-in functions."""
-    engine = ExecutionEngine(task_registry=registry)
-    engine.register("add", _add_numbers)
-    engine.register("multiply", _multiply_numbers)
+def _create_engine():
+    """Create an execution engine with built-in tasks."""
+    engine = ExecutionEngine()
+    register_builtin_tasks(engine)
     return engine
 
 
-def _submit_payload(
-    payload: dict[str, Any],
-    engine: ExecutionEngine,
-) -> dict[str, Any]:
-    """Validate a request and execute an explicitly registered task."""
-    name = payload.get("task")
-    args = payload.get("args", [])
-    kwargs = payload.get("kwargs", {})
+def _validate_port(port, option):
+    """Validate a port and print a useful error."""
+    if not 1 <= port <= 65535:
+        typer.echo(f"{option} must be between 1 and 65535")
+        raise typer.Exit(code=1)
 
-    if not isinstance(name, str) or not name.strip():
-        raise ValueError("'task' must be a non-empty string.")
 
-    if not isinstance(args, list):
-        raise TypeError("'args' must be a JSON array.")
+def _peer_address(peer, key=None):
+    """Extract a peer's network address from a NodeInfo-like object."""
+    address = getattr(peer, "address", None)
+    if address is None:
+        address = getattr(peer, "addr", None)
 
-    if not isinstance(kwargs, dict) or not all(isinstance(key, str) for key in kwargs):
-        raise ValueError("'kwargs' must be a JSON object with string keys.")
+    if address is None:
+        host = getattr(peer, "host", None)
+        port = getattr(peer, "port", None)
+        if host is not None and port is not None:
+            address = (host, port)
 
-    if name not in engine.registered_tasks():
-        raise ValueError(
-            f"Unknown task '{name}'. Available tasks: "
-            f"{', '.join(engine.registered_tasks())}"
-        )
+    if address is None and isinstance(key, tuple) and len(key) == 2:
+        address = key
 
-    task = Task(task_name=name, args=tuple(args), kwargs=kwargs)
-    result = engine.execute(task)
+    if address is None:
+        return None
 
-    response: dict[str, Any] = {
-        "task_id": result.task_id,
-        "task": name,
-        "status": result.status.value.upper(),
-        "attempts": result.attempts,
-        "duration_seconds": result.duration_seconds,
-    }
+    try:
+        return tuple(address)
+    except TypeError:
+        return None
 
-    if result.error is not None:
-        response["error"] = result.error
-    else:
-        response["result"] = result.value
 
-    return response
+def select_seed_destination(protocol, seed):
+    """Choose a live worker discovered through the seed."""
+    seed_address = (seed.host, seed.port)
+    registry = getattr(protocol, "node_registry", {})
+    current_node_id = getattr(protocol, "node_id", None)
+
+    peers = registry.items() if isinstance(registry, dict) else []
+
+    seed_is_known = False
+
+    for key, peer in peers:
+        address = _peer_address(peer, key)
+        if address is None:
+            continue
+
+        peer_id = getattr(peer, "node_id", None)
+        if peer_id is None:
+            peer_id = getattr(peer, "id", None)
+
+        if address == seed_address:
+            seed_is_known = True
+            continue
+
+        if current_node_id is not None and peer_id == current_node_id:
+            continue
+
+        status = getattr(peer, "status", None)
+        status = getattr(status, "name", status)
+
+        if status is not None and not str(status).upper().endswith("ALIVE"):
+            continue
+
+        return address
+
+    if seed_is_known:
+        return seed_address
+
+    raise RuntimeError("No available worker or seed peer was discovered.")
+
+
+def _wait_for_task_result(protocol, seq, task_id, timeout):
+    """Wait for the result matching the request sequence and task ID."""
+    deadline = time.monotonic() + timeout
+
+    while time.monotonic() < deadline:
+        envelopes = getattr(protocol, "received_envelopes", [])
+
+        for envelope in list(envelopes):
+            if isinstance(envelope, tuple):
+                message = envelope[0]
+            else:
+                message = getattr(envelope, "message", envelope)
+
+            if getattr(message, "type", None) != TASK_RESULT:
+                continue
+
+            if getattr(message, "seq", None) != seq:
+                continue
+
+            payload = getattr(message, "payload", {})
+            if payload.get("task_id") != task_id:
+                continue
+
+            try:
+                envelopes.remove(envelope)
+            except (AttributeError, ValueError):
+                pass
+
+            return payload
+
+        time.sleep(0.005)
+
+    raise TimeoutError(f"Timed out waiting for task result ({timeout:g}s).")
 
 
 @app.command()
 def start(
-    port: int = typer.Option(8000, "--port", help="UDP port for this node."),
-    web: bool = typer.Option(
-        False,
-        "--web",
-        help="Start the live local web dashboard alongside this node.",
+    host: str = typer.Option("127.0.0.1", help="Host address to bind."),
+    port: int = typer.Option(8000, help="UDP port."),
+    node_id: str = typer.Option(None, help="Optional node identifier."),
+    seed: str = typer.Option(None, help="Seed address in host:port format."),
+    demo_tasks: bool = typer.Option(
+        False, "--demo-tasks", help="Register built-in demo tasks."
     ),
-    web_port: int = typer.Option(
-        8765,
-        "--web-port",
-        min=1,
-        max=65535,
-        help="Local HTTP port for the dashboard (used with --web).",
-    ),
+    web: bool = typer.Option(False, "--web", help="Start the web dashboard."),
+    web_port: int = typer.Option(8765, help="Dashboard HTTP port."),
 ):
-    """Start a MeshWeaver node, optionally with the live dashboard."""
-    if not 1 <= port <= 65535:
-        console.print("[red]Error: UDP port must be between 1 and 65535.[/red]")
-        raise typer.Exit(code=1)
+    """Start a UDP node and optionally its dashboard."""
+    _validate_port(port, "port")
+    _validate_port(web_port, "--web-port")
 
-    registry = TaskRegistry()
-    engine = _create_engine(registry)
+    engine = _create_engine()
 
     async def run_node():
-        transport = None
-        dashboard_server = None
+        transport, protocol = await start_udp_node(
+            host=host,
+            port=port,
+            node_id=node_id or f"node-{port}",
+            execution_engine=engine,
+        )
+
+        dashboard = None
 
         try:
-            transport, protocol = await start_udp_node(
-                host="127.0.0.1",
-                port=port,
-                node_id=f"node-{port}",
-            )
+            if seed:
+                seed_address = parse_seed_address(seed)
+                await request_peer_list(
+                    protocol=protocol,
+                    node_id=node_id or f"node-{port}",
+                    seed=seed_address,
+                )
 
-            console.print(f"[green]MeshWeaver node running on 127.0.0.1:{port}[/green]")
+            typer.echo(f"MeshWeaver node running at {host}:{port}")
 
             if web:
-                from web.server import HOST as WEB_HOST
-                from web.server import create_dashboard_server
-                from web.snapshot import build_snapshot
+                from dashboard.server import create_dashboard_server
+                from dashboard.snapshot import build_snapshot
 
-                dashboard_server = create_dashboard_server(
-                    lambda: build_snapshot(
-                        protocol=protocol,
-                        transport=transport,
-                        node_id=f"node-{port}",
-                        host="127.0.0.1",
-                        port=port,
-                        task_registry=registry,
-                    ),
-                    host=WEB_HOST,
+                dashboard = create_dashboard_server(
+                    host=host,
                     port=web_port,
-                    task_submitter=lambda payload: _submit_payload(payload, engine),
+                    snapshot_provider=lambda: build_snapshot(
+                        protocol=protocol,
+                        execution_engine=engine,
+                    ),
                 )
+                typer.echo(f"Dashboard: http://{host}:{web_port}/")
 
-                console.print(
-                    f"[green]Live dashboard: " f"http://{WEB_HOST}:{web_port}/[/green]"
-                )
-                console.print(
-                    "[dim]Tasks execute locally in this process. "
-                    "UDP task distribution is not implemented yet.[/dim]"
-                )
-
-            console.print("Registered tasks: add, multiply")
-            console.print("Press Ctrl+C to stop the node.")
             await asyncio.Event().wait()
 
         finally:
-            if dashboard_server is not None:
-                dashboard_server.shutdown()
-                dashboard_server.server_close()
+            if dashboard is not None:
+                if hasattr(dashboard, "shutdown"):
+                    dashboard.shutdown()
+                elif hasattr(dashboard, "close"):
+                    dashboard.close()
 
-            if transport is not None:
-                transport.close()
+            transport.close()
 
     try:
         asyncio.run(run_node())
     except KeyboardInterrupt:
-        console.print("\n[yellow]MeshWeaver node stopped.[/yellow]")
+        typer.echo("Node stopped.")
+    except typer.Exit:
+        raise
+    except Exception as exc:
+        typer.echo(f"Error starting node: {exc}")
+        raise typer.Exit(code=1) from exc
 
 
 @app.command()
 def submit(
-    task: str | None = typer.Option(
-        None,
-        "--task",
-        help="Registered task name.",
+    task_name: str = typer.Argument(..., help="Task name, such as add or multiply."),
+    args: str = typer.Option(
+        "[]", "--args", help="JSON array of positional arguments."
     ),
-    args_json: str = typer.Option(
-        "[]",
-        "--args-json",
-        help='JSON array of positional arguments, e.g. "[2,3]".',
+    kwargs: str = typer.Option(
+        "{}", "--kwargs", help="JSON object of keyword arguments."
     ),
-    kwargs_json: str = typer.Option(
-        "{}",
-        "--kwargs-json",
-        help='JSON object of keyword arguments, e.g. "{}".',
-    ),
-    url: str = typer.Option(
-        "http://127.0.0.1:8765",
-        "--url",
-        help="Base URL of the running dashboard runtime.",
-    ),
+    host: str = typer.Option("127.0.0.1", help="Target node host."),
+    port: int = typer.Option(8000, help="Target node UDP port."),
+    timeout: float = typer.Option(5.0, help="Result timeout in seconds."),
+    seed: str = typer.Option(None, help="Optional seed address in host:port format."),
 ):
-    """Submit a task to a running local MeshWeaver node."""
-    # Preserve the behavior expected by the existing CLI test.
-    if task is None:
-        console.print("[yellow]Submit command is not implemented yet.[/yellow]")
+    """Submit a task to a remote MeshWeaver node."""
+    _validate_port(port, "--port")
+
+    if not math.isfinite(timeout) or timeout <= 0:
+        typer.echo("--timeout must be a finite positive number")
+        raise typer.Exit(code=1)
+
+    try:
+        task_args = json.loads(args)
+    except json.JSONDecodeError as exc:
+        typer.echo(f"Invalid --args JSON: {exc}")
+        raise typer.Exit(code=1) from exc
+
+    if not isinstance(task_args, list):
+        typer.echo("--args must be a JSON array")
+        raise typer.Exit(code=1)
+
+    try:
+        task_kwargs = json.loads(kwargs)
+    except json.JSONDecodeError as exc:
+        typer.echo(f"Invalid --kwargs JSON: {exc}")
+        raise typer.Exit(code=1) from exc
+
+    if not isinstance(task_kwargs, dict):
+        typer.echo("--kwargs must be a JSON object")
+        raise typer.Exit(code=1)
+
+    task_id = str(uuid.uuid4())
+
+    try:
+        task = Task(
+            task_name,
+            args=tuple(task_args),
+            kwargs=task_kwargs,
+        )
+    except (TypeError, ValueError) as exc:
+        typer.echo(f"Invalid task: {exc}")
+        raise typer.Exit(code=1) from exc
+
+    task_payload = {
+        "task_id": task_id,
+        "task_name": task_name,
+        "args": task_args,
+        "kwargs": task_kwargs,
+    }
+
+    async def send_task():
+        transport, protocol = await start_udp_node(
+            host="127.0.0.1",
+            port=0,
+            node_id=f"client-{uuid.uuid4().hex[:8]}",
+        )
+
+        try:
+            destination = (host, port)
+
+            if seed:
+                seed_address = parse_seed_address(seed)
+                joined = await request_peer_list(
+                    protocol=protocol,
+                    node_id=getattr(protocol, "node_id", "meshweaver-client"),
+                    seed=seed_address,
+                    timeout=timeout,
+                )
+
+                if not joined:
+                    raise RuntimeError("Could not discover peers through the seed.")
+
+                destination = select_seed_destination(protocol, seed_address)
+
+            request = Message(
+                type=TASK_REQUEST,
+                sender_id=getattr(protocol, "node_id", "meshweaver-client"),
+                seq=1,
+                payload={"task": task_payload},
+            )
+
+            protocol.send_message(request, destination)
+
+            return await asyncio.to_thread(
+                _wait_for_task_result,
+                protocol,
+                request.seq,
+                task_id,
+                timeout,
+            )
+
+        finally:
+            transport.close()
+
+    typer.echo(f"Submitted task '{task_name}'")
+
+    try:
+        result = asyncio.run(send_task())
+    except TimeoutError as exc:
+        typer.echo(f"Timed out: {exc}")
+        raise typer.Exit(code=1) from exc
+    except typer.Exit:
+        raise
+    except Exception as exc:
+        typer.echo(f"Task submission failed: {exc}")
+        raise typer.Exit(code=1) from exc
+
+    status = str(result.get("status", "failed")).lower()
+    typer.echo(f"Status: {status}")
+
+    if status == "completed":
+        typer.echo(f"Result: {result.get('value')}")
         return
 
-    try:
-        args = json.loads(args_json)
-        kwargs = json.loads(kwargs_json)
-    except json.JSONDecodeError as exc:
-        console.print(f"[red]Invalid JSON: {exc.msg}[/red]")
-        raise typer.Exit(code=2) from exc
+    if result.get("error"):
+        typer.echo(str(result["error"]))
 
-    if not isinstance(args, list):
-        console.print("[red]--args-json must be a JSON array.[/red]")
-        raise typer.Exit(code=2)
-
-    if not isinstance(kwargs, dict) or not all(isinstance(key, str) for key in kwargs):
-        console.print(
-            "[red]--kwargs-json must be a JSON object with string keys.[/red]"
-        )
-        raise typer.Exit(code=2)
-
-    payload = json.dumps({"task": task, "args": args, "kwargs": kwargs}).encode("utf-8")
-
-    request = Request(
-        url.rstrip("/") + "/api/tasks",
-        data=payload,
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-
-    try:
-        with urlopen(request, timeout=10) as response:
-            result = json.loads(response.read().decode("utf-8"))
-
-    except HTTPError as exc:
-        try:
-            message = json.loads(exc.read().decode("utf-8")).get("error", str(exc))
-        except (json.JSONDecodeError, UnicodeDecodeError):
-            message = str(exc)
-
-        console.print(f"[red]Task submission rejected: {message}[/red]")
-        raise typer.Exit(code=1) from exc
-
-    except (URLError, TimeoutError, OSError) as exc:
-        console.print(
-            "[red]Could not reach the running node. Start it with "
-            "'python -m cli.main start --web' first.[/red]"
-        )
-        console.print(f"[dim]{exc}[/dim]")
-        raise typer.Exit(code=1) from exc
-
-    console.print_json(json.dumps(result))
+    raise typer.Exit(code=1)
 
 
 if __name__ == "__main__":

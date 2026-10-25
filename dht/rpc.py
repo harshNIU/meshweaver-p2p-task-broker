@@ -1,0 +1,9 @@
+"""DHT wire types carried in the team's unchanged Message envelope."""
+
+PING = "DHT_PING"
+FIND_NODE = "FIND_NODE"
+STORE = "STORE"
+FIND_VALUE = "FIND_VALUE"
+RESPONSE = "DHT_RESPONSE"
+REQUESTS = {PING, FIND_NODE, STORE, FIND_VALUE}
+MAX_PACKET_BYTES = 16384

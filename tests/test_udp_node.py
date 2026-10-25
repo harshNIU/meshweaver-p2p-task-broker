@@ -1,7 +1,11 @@
 import asyncio
+import json
 import unittest
 
-from net.messages import PING, PONG, Message
+from execution.engine import ExecutionEngine
+from execution.models import Task
+from execution.serializer import serialize_task
+from net.messages import PING, PONG, TASK_REQUEST, TASK_RESULT, Message
 from net.udp_node import start_udp_node
 
 
@@ -28,7 +32,6 @@ class TestUDPNode(unittest.IsolatedAsyncioTestCase):
 
     async def test_two_nodes_exchange_plain_text_messages(self):
         address_b = self.transport_b.get_extra_info("sockname")
-
         self.protocol_a.send_message("Hello MeshWeaver", address_b)
 
         await self.wait_for_condition(
@@ -36,13 +39,11 @@ class TestUDPNode(unittest.IsolatedAsyncioTestCase):
         )
 
         message, sender = self.protocol_b.received_messages[0]
-
         self.assertEqual(message, "Hello MeshWeaver")
         self.assertEqual(sender[0], "127.0.0.1")
 
     async def test_structured_message_is_received(self):
         address_b = self.transport_b.get_extra_info("sockname")
-
         message = Message(
             type="TEST",
             sender_id="node-a",
@@ -57,7 +58,6 @@ class TestUDPNode(unittest.IsolatedAsyncioTestCase):
         )
 
         received, sender = self.protocol_b.received_envelopes[0]
-
         self.assertEqual(received.type, "TEST")
         self.assertEqual(received.sender_id, "node-a")
         self.assertEqual(received.seq, 1)
@@ -66,7 +66,6 @@ class TestUDPNode(unittest.IsolatedAsyncioTestCase):
 
     async def test_ping_receives_pong_response(self):
         address_b = self.transport_b.get_extra_info("sockname")
-
         ping = Message(
             type=PING,
             sender_id="node-a",
@@ -79,7 +78,7 @@ class TestUDPNode(unittest.IsolatedAsyncioTestCase):
         await self.wait_for_condition(
             lambda: any(
                 received.type == PONG
-                for received, _ in self.protocol_a.received_envelopes
+                for received, _address in self.protocol_a.received_envelopes
             )
         )
 
@@ -96,7 +95,6 @@ class TestUDPNode(unittest.IsolatedAsyncioTestCase):
 
     async def test_unknown_structured_message_does_not_reply(self):
         address_b = self.transport_b.get_extra_info("sockname")
-
         message = Message(
             type="TEST",
             sender_id="node-a",
@@ -109,14 +107,12 @@ class TestUDPNode(unittest.IsolatedAsyncioTestCase):
         await self.wait_for_condition(
             lambda: len(self.protocol_b.received_envelopes) == 1
         )
-
         await asyncio.sleep(0.1)
 
         self.assertEqual(len(self.protocol_a.received_envelopes), 0)
 
     async def test_structured_message_records_peer_activity(self):
         address_b = self.transport_b.get_extra_info("sockname")
-
         message = Message(
             type="TEST",
             sender_id="node-a",
@@ -131,6 +127,26 @@ class TestUDPNode(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertTrue(self.protocol_b.peer_manager.is_peer_alive("node-a"))
+
+    async def test_structured_message_records_peer_address(self):
+        address_b = self.transport_b.get_extra_info("sockname")
+        message = Message(
+            type="TEST",
+            sender_id="node-a",
+            seq=500,
+            payload={},
+        )
+
+        self.protocol_a.send_message(message, address_b)
+
+        await self.wait_for_condition(
+            lambda: self.protocol_b.peer_manager.get_peer_address("node-a") is not None
+        )
+
+        self.assertEqual(
+            self.protocol_b.peer_manager.get_peer_address("node-a"),
+            self.transport_a.get_extra_info("sockname"),
+        )
 
     async def test_cleanup_expired_peers(self):
         """Remove expired peers while preserving active peers."""
@@ -148,7 +164,6 @@ class TestUDPNode(unittest.IsolatedAsyncioTestCase):
 
     async def test_plain_text_does_not_register_structured_peer(self):
         address_b = self.transport_b.get_extra_info("sockname")
-
         self.protocol_a.send_message("Hello MeshWeaver", address_b)
 
         await self.wait_for_condition(
@@ -159,7 +174,6 @@ class TestUDPNode(unittest.IsolatedAsyncioTestCase):
 
     async def test_duplicate_structured_message_is_ignored(self):
         address_b = self.transport_b.get_extra_info("sockname")
-
         message = Message(
             type="TEST",
             sender_id="node-a",
@@ -173,14 +187,12 @@ class TestUDPNode(unittest.IsolatedAsyncioTestCase):
         await self.wait_for_condition(
             lambda: len(self.protocol_b.received_envelopes) == 1
         )
-
         await asyncio.sleep(0.1)
 
         self.assertEqual(len(self.protocol_b.received_envelopes), 1)
 
     async def test_same_sequence_from_different_senders_is_accepted(self):
         address_b = self.transport_b.get_extra_info("sockname")
-
         message_a = Message(
             type="TEST",
             sender_id="node-a",
@@ -202,6 +214,227 @@ class TestUDPNode(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(len(self.protocol_b.received_envelopes), 2)
+
+    async def test_task_request_executes_registered_task(self):
+        engine = ExecutionEngine()
+        engine.register("add", lambda a, b: a + b)
+
+        self.transport_b.close()
+        await asyncio.sleep(0)
+
+        self.transport_b, self.protocol_b = await start_udp_node(
+            node_id="node-b",
+            execution_engine=engine,
+        )
+        address_b = self.transport_b.get_extra_info("sockname")
+
+        task = Task(task_name="add", args=(2, 3))
+        request = Message(
+            type=TASK_REQUEST,
+            sender_id="node-a",
+            seq=200,
+            payload={"task": json.loads(serialize_task(task))},
+        )
+
+        self.protocol_a.send_message(request, address_b)
+
+        await self.wait_for_condition(
+            lambda: any(
+                message.type == TASK_RESULT
+                for message, _address in self.protocol_a.received_envelopes
+            )
+        )
+
+        result = next(
+            message
+            for message, _address in self.protocol_a.received_envelopes
+            if message.type == TASK_RESULT
+        )
+
+        self.assertEqual(result.payload["task_id"], task.task_id)
+        self.assertEqual(result.payload["status"], "completed")
+        self.assertEqual(result.payload["value"], 5)
+
+    async def test_task_request_unknown_task_returns_failure(self):
+        address_b = self.transport_b.get_extra_info("sockname")
+        task = Task(task_name="unknown_task")
+
+        request = Message(
+            type=TASK_REQUEST,
+            sender_id="node-a",
+            seq=201,
+            payload={"task": json.loads(serialize_task(task))},
+        )
+
+        self.protocol_a.send_message(request, address_b)
+
+        await self.wait_for_condition(
+            lambda: any(
+                message.type == TASK_RESULT
+                for message, _address in self.protocol_a.received_envelopes
+            )
+        )
+
+        result = next(
+            message
+            for message, _address in self.protocol_a.received_envelopes
+            if message.type == TASK_RESULT
+        )
+
+        self.assertEqual(result.payload["status"], "failed")
+        self.assertIn("Unknown task", result.payload["error"])
+
+    async def test_malformed_task_payload_returns_failure(self):
+        address_b = self.transport_b.get_extra_info("sockname")
+        request = Message(
+            type=TASK_REQUEST,
+            sender_id="node-a",
+            seq=300,
+            payload={"task": "not-a-task-object"},
+        )
+
+        self.protocol_a.send_message(request, address_b)
+
+        await self.wait_for_condition(
+            lambda: any(
+                message.type == TASK_RESULT
+                for message, _address in self.protocol_a.received_envelopes
+            )
+        )
+
+        result = next(
+            message
+            for message, _address in self.protocol_a.received_envelopes
+            if message.type == TASK_RESULT
+        )
+
+        self.assertEqual(result.payload["status"], "failed")
+        self.assertIn("task object", result.payload["error"])
+
+    async def test_duplicate_task_request_reuses_cached_result(self):
+        engine = ExecutionEngine()
+        calls = []
+
+        def count_call():
+            calls.append(1)
+            return len(calls)
+
+        engine.register("count_call", count_call)
+
+        self.transport_b.close()
+        await asyncio.sleep(0)
+        self.transport_b, self.protocol_b = await start_udp_node(
+            node_id="node-b",
+            execution_engine=engine,
+        )
+        address_b = self.transport_b.get_extra_info("sockname")
+
+        task = Task(task_name="count_call")
+        request = Message(
+            type=TASK_REQUEST,
+            sender_id="node-a",
+            seq=301,
+            payload={"task": json.loads(serialize_task(task))},
+        )
+
+        self.protocol_a.send_message(request, address_b)
+
+        await self.wait_for_condition(
+            lambda: any(
+                message.type == TASK_RESULT and message.seq == 301
+                for message, _address in self.protocol_a.received_envelopes
+            )
+        )
+
+        first_result = next(
+            message
+            for message, _address in self.protocol_a.received_envelopes
+            if message.type == TASK_RESULT and message.seq == 301
+        )
+
+        self.protocol_a.send_message(request, address_b)
+
+        await self.wait_for_condition(
+            lambda: len(
+                [
+                    message
+                    for message, _address in self.protocol_a.received_envelopes
+                    if message.type == TASK_RESULT and message.seq == 301
+                ]
+            )
+            >= 2
+        )
+
+        results = [
+            message
+            for message, _address in self.protocol_a.received_envelopes
+            if message.type == TASK_RESULT and message.seq == 301
+        ]
+
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(results[0].payload["value"], 1)
+        self.assertEqual(results[1].payload, first_result.payload)
+
+    async def test_same_task_id_with_new_sequence_reuses_cached_result(self):
+        engine = ExecutionEngine()
+        calls = []
+
+        def count_call():
+            calls.append(1)
+            return len(calls)
+
+        engine.register("count_call", count_call)
+
+        self.transport_b.close()
+        await asyncio.sleep(0)
+        self.transport_b, self.protocol_b = await start_udp_node(
+            node_id="node-b",
+            execution_engine=engine,
+        )
+        address_b = self.transport_b.get_extra_info("sockname")
+
+        task = Task(task_name="count_call")
+        task_payload = json.loads(serialize_task(task))
+
+        first_request = Message(
+            type=TASK_REQUEST,
+            sender_id="node-a",
+            seq=302,
+            payload={"task": task_payload},
+        )
+        second_request = Message(
+            type=TASK_REQUEST,
+            sender_id="node-a",
+            seq=303,
+            payload={"task": task_payload},
+        )
+
+        self.protocol_a.send_message(first_request, address_b)
+
+        await self.wait_for_condition(
+            lambda: any(
+                message.type == TASK_RESULT and message.seq == 302
+                for message, _address in self.protocol_a.received_envelopes
+            )
+        )
+
+        self.protocol_a.send_message(second_request, address_b)
+
+        await self.wait_for_condition(
+            lambda: any(
+                message.type == TASK_RESULT and message.seq == 303
+                for message, _address in self.protocol_a.received_envelopes
+            )
+        )
+
+        second_result = next(
+            message
+            for message, _address in self.protocol_a.received_envelopes
+            if message.type == TASK_RESULT and message.seq == 303
+        )
+
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(second_result.payload["value"], 1)
 
 
 if __name__ == "__main__":
