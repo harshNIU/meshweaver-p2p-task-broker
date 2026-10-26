@@ -25,7 +25,13 @@ jobs:
         run: python -m pytest
 
       - name: Check formatting with Black
-        run: python -m black --check cli tests
+        run: python -m black --check cli tests dht tasks scripts web
 
       - name: Lint with Ruff
-        run: python -m ruff check cli tests
+        run: python -m ruff check cli tests dht tasks scripts web
+
+      - name: Audit ten independent DHT processes
+        run: python -m scripts.spawn_nodes --nodes 10 --base-port 0
+
+      - name: Exercise task routing and failover
+        run: python -m scripts.routing_demo

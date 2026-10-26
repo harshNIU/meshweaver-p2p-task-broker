@@ -1,12 +1,13 @@
+
 """Track peer activity, addresses, and connection timeouts."""
 
 import time
 
 
 class PeerConnectionManager:
-    """Maintain last-seen timestamps and network addresses for peers."""
+    """Maintain peer last-seen timestamps and network addresses."""
 
-    def __init__(self, timeout_seconds=10.0):
+    def __init__(self, timeout_seconds=30.0):
         if timeout_seconds <= 0:
             raise ValueError("timeout_seconds must be positive")
 

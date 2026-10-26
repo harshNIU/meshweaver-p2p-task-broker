@@ -7,10 +7,12 @@ from typing import Any
 from execution.engine import ExecutionEngine
 from execution.models import TaskStatus
 from execution.serializer import TaskSerializationError, deserialize_task
+from net.correlation import CorrelationManager, RequestTimeoutError
 from net.messages import TASK_REQUEST, TASK_RESULT, Message
 
 # Maximum size of a newline-delimited TCP message, including its newline.
 MAX_MESSAGE_SIZE = 64 * 1024
+DEFAULT_REQUEST_TIMEOUT = 5.0
 
 
 async def read_message(reader: asyncio.StreamReader) -> Message:
@@ -89,6 +91,7 @@ def _failure_response(
         sender_id="tcp-server",
         seq=message.seq,
         payload=payload,
+        correlation_id=message.correlation_id,
     )
 
 
@@ -126,7 +129,6 @@ async def _handle_task_request(
         # Keep synchronous task execution off the asyncio event loop.
         result = await asyncio.to_thread(execution_engine.execute, task)
     except (ValueError, RuntimeError) as exc:
-        # Includes duplicate task IDs and an unavailable execution engine.
         return _failure_response(
             message,
             f"Task execution rejected: {exc}",
@@ -138,6 +140,7 @@ async def _handle_task_request(
         sender_id="tcp-server",
         seq=message.seq,
         payload=_result_payload(result),
+        correlation_id=message.correlation_id,
     )
 
 
@@ -168,6 +171,7 @@ async def handle_client(
                         "received": True,
                         "original_type": message.type,
                     },
+                    correlation_id=message.correlation_id,
                 )
 
             await send_message(writer, response)
@@ -215,20 +219,58 @@ async def send_tcp_message(
     host: str,
     port: int,
     message: Message,
+    timeout: float = DEFAULT_REQUEST_TIMEOUT,
 ) -> Message:
-    """Connect to a TCP server, send one message, and return its response."""
-    reader, writer = await asyncio.open_connection(
-        host,
-        port,
-        limit=MAX_MESSAGE_SIZE,
-    )
+    """Send a correlated TCP request and return its matching response."""
+    if timeout <= 0:
+        raise ValueError("timeout must be greater than zero")
+
+    manager = CorrelationManager()
+    correlation_id, _ = manager.create_request()
+
+    # Use a unique ID for this network request.
+    message.correlation_id = correlation_id
+
+    reader = None
+    writer = None
 
     try:
-        await send_message(writer, message)
-        return await read_message(reader)
-    finally:
-        writer.close()
         try:
-            await writer.wait_closed()
-        except ConnectionError:
-            pass
+            reader, writer = await asyncio.wait_for(
+                asyncio.open_connection(
+                    host,
+                    port,
+                    limit=MAX_MESSAGE_SIZE,
+                ),
+                timeout=timeout,
+            )
+            await asyncio.wait_for(
+                send_message(writer, message),
+                timeout=timeout,
+            )
+            response = await asyncio.wait_for(
+                read_message(reader),
+                timeout=timeout,
+            )
+        except TimeoutError as exc:
+            raise RequestTimeoutError(
+                f"TCP request timed out after {timeout} seconds"
+            ) from exc
+
+        if response.correlation_id != correlation_id:
+            raise ValueError("TCP response correlation ID does not match the request")
+
+        if not manager.deliver_response(correlation_id, response):
+            raise ValueError("TCP response could not be matched to its request")
+
+        return await manager.wait_for_response(correlation_id, timeout)
+
+    finally:
+        manager.cancel_request(correlation_id)
+
+        if writer is not None:
+            writer.close()
+            try:
+                await writer.wait_closed()
+            except ConnectionError:
+                pass

@@ -1,5 +1,26 @@
 # MeshWeaver — P2P Task Broker
 
+## Harsh's DHT and routing branch
+
+Kademlia discovery and task routing are implemented on this branch. Start with
+[the Member 2 review guide](docs/member2_review.md) for setup, code explanations,
+integration APIs, and the exact limitations of the review demo.
+
+```bash
+python -m pip install -r requirements.txt
+python -m pytest -q
+python -m scripts.spawn_nodes --nodes 10 --base-port 9000
+python -m scripts.routing_demo
+```
+
+The network audit runs ten independent Python processes. The task demo uses
+the team's registered-function executor and proves lowest-load routing and
+retry after a worker stops. [Recorded validation](docs/network_audit.md).
+
+The team overview below describes the broader project; the Member 2 guide
+states what this branch currently implements and what still requires integration.
+
+
 MeshWeaver is a decentralized Python framework designed to explore peer-to-peer communication, distributed task execution, and fault-tolerant coordination across multiple computers.
 
 The project is organized into networking, gossip, CLI, and security modules. It includes asynchronous UDP communication, structured peer messages, peer connection tracking, node metrics, and tests for core components.

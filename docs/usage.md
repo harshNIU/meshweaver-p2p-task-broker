@@ -63,3 +63,11 @@ python -m cli.main submit
 ## Networking Note
 
 The current CLI binds to `127.0.0.1`, which is the loopback address. The node is accessible from the same computer, not directly from other computers on the network.
+
+## Join an Existing Mesh
+
+Use `--bootstrap host:port` to register a node with an existing MeshWeaver node and discover peers.
+
+Start the first node in one terminal with `python -m cli.main start --port 9000`. In a second terminal, run `python -m cli.main start --port 9001 --bootstrap 127.0.0.1:9000`.
+
+The bootstrap node must be running and reachable. The `--seed` option remains available as a backward-compatible alternative to `--bootstrap`.
