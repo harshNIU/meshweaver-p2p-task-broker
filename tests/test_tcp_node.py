@@ -1,8 +1,11 @@
+"""Tests for TCP communication and message-size limits."""
+
 import asyncio
 import unittest
 
 from net.messages import Message
 from net.tcp_node import (
+    MAX_MESSAGE_SIZE,
     read_message,
     send_tcp_message,
     start_tcp_server,
@@ -71,13 +74,11 @@ class TestTCPNode(unittest.IsolatedAsyncioTestCase):
         ]
 
         try:
-            # Send both messages over the same TCP connection.
             for message in messages:
                 writer.write(message.encode() + b"\n")
 
             await writer.drain()
 
-            # Read the ACK for each message.
             responses = [
                 await read_message(reader),
                 await read_message(reader),
@@ -87,9 +88,7 @@ class TestTCPNode(unittest.IsolatedAsyncioTestCase):
                 [response.seq for response in responses],
                 [10, 11],
             )
-
             self.assertTrue(all(response.payload["received"] for response in responses))
-
             self.assertEqual(
                 [message.seq for message in self.received_messages],
                 [10, 11],
@@ -113,25 +112,30 @@ class TestTCPNode(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(EOFError):
             await read_message(reader)
 
-    async def test_server_accepts_valid_client_after_invalid_message(self):
+    async def test_oversized_message_is_rejected(self):
+        reader = asyncio.StreamReader(limit=MAX_MESSAGE_SIZE)
+        reader.feed_data(b"x" * (MAX_MESSAGE_SIZE + 1) + b"\n")
+        reader.feed_eof()
+
+        with self.assertRaisesRegex(ValueError, "exceeds"):
+            await read_message(reader)
+
+    async def test_server_closes_oversized_client_and_accepts_next_client(self):
         reader, writer = await asyncio.open_connection(self.host, self.port)
 
         try:
-            # Send invalid JSON to the server.
-            writer.write(b"{invalid json}\n")
+            writer.write(b"x" * (MAX_MESSAGE_SIZE + 1) + b"\n")
             await writer.drain()
 
-            # The server should close the faulty client's connection.
             response = await asyncio.wait_for(reader.read(), timeout=2)
             self.assertEqual(response, b"")
         finally:
             writer.close()
             await writer.wait_closed()
 
-        # Check that the server still accepts a valid client.
         message = Message(
             type="TASK",
-            sender_id="node-after-error",
+            sender_id="node-after-oversized-message",
             seq=99,
             payload={"task": "check_server"},
         )
