@@ -139,9 +139,16 @@ def start(
     host: str = typer.Option("127.0.0.1", help="Host address to bind."),
     port: int = typer.Option(8000, help="UDP port."),
     node_id: str = typer.Option(None, help="Optional node identifier."),
-    seed: str = typer.Option(None, help="Seed address in host:port format."),
+    seed: str | None = typer.Option(
+        None,
+        "--seed",
+        "--bootstrap",
+        help="Register this node with a seed/bootstrap host:port address, such as 127.0.0.1:8000.",
+    ),
     demo_tasks: bool = typer.Option(
-        False, "--demo-tasks", help="Register built-in demo tasks."
+        False,
+        "--demo-tasks",
+        help="Register the built-in add and multiply demonstration tasks.",
     ),
     web: bool = typer.Option(False, "--web", help="Start the web dashboard."),
     web_port: int = typer.Option(8765, help="Dashboard HTTP port."),
@@ -165,11 +172,16 @@ def start(
         try:
             if seed:
                 seed_address = parse_seed_address(seed)
-                await request_peer_list(
+                joined = await request_peer_list(
                     protocol=protocol,
                     node_id=node_id or f"node-{port}",
                     seed=seed_address,
+                    timeout=2.0,
                 )
+                if joined:
+                    typer.echo(f"Registered with seed {seed}")
+                else:
+                    typer.echo(f"Could not discover peers through seed {seed}")
 
             typer.echo(f"MeshWeaver node running at {host}:{port}")
 
@@ -329,9 +341,8 @@ def submit(
                     protocol=protocol,
                     node_id=getattr(protocol, "node_id", "meshweaver-client"),
                     seed=seed_address,
-                    timeout=timeout,
+                    timeout=2.0,
                 )
-
                 if not joined:
                     raise RuntimeError("Could not discover peers through the seed.")
 
