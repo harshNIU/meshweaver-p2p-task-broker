@@ -14,7 +14,8 @@ try {
         $arguments = @(
             "-m", "cli.main", "start",
             "--host", "127.0.0.1",
-            "--port", "$port"
+            "--port", "$port",
+            "--demo-tasks"
         )
 
         if ($port -eq 8000) {
@@ -46,6 +47,7 @@ try {
     Write-Host ""
     Write-Host "All four nodes started." -ForegroundColor Green
     Write-Host "Dashboard: http://127.0.0.1:8765/"
+    Write-Host "Demo tasks: add, multiply"
     Write-Host "Press Ctrl+C to stop the nodes."
 
     while ($true) {
@@ -70,6 +72,7 @@ finally {
             if (-not $process.HasExited) {
                 Stop-Process -Id $process.Id -Force `
                     -ErrorAction SilentlyContinue
+
                 Write-Host "Stopped process $($process.Id)"
             }
         }
