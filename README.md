@@ -273,3 +273,7 @@ Distributed task execution, secure communication, and a complete CLI task-submis
 ## License
 
 Add the project's license here once the team has selected and confirmed the applicable license.
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for project setup, testing, code quality checks, branch workflow, and pull request guidelines.
