@@ -3,12 +3,12 @@
 import unittest
 from unittest.mock import AsyncMock, patch
 
-from net.messages import Message, TASK_ACK, TASK_ASSIGN
+from net.messages import TASK_ACK, TASK_ASSIGN, Message
 from net.task_channel import (
     TaskAssignmentError,
     assign_task,
 )
-from net.tcp_node import start_tcp_server, _handle_task_assignment
+from net.tcp_node import _handle_task_assignment, start_tcp_server
 
 
 class TestTaskChannel(unittest.IsolatedAsyncioTestCase):
