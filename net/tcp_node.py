@@ -8,7 +8,7 @@ from execution.engine import ExecutionEngine
 from execution.models import TaskStatus
 from execution.serializer import TaskSerializationError, deserialize_task
 from net.correlation import CorrelationManager, RequestTimeoutError
-from net.messages import TASK_REQUEST, TASK_RESULT, Message
+from net.messages import TASK_ACK, TASK_ASSIGN, TASK_REQUEST, TASK_RESULT, Message
 
 # Maximum size of a newline-delimited TCP message, including its newline.
 MAX_MESSAGE_SIZE = 64 * 1024
@@ -144,6 +144,71 @@ async def _handle_task_request(
     )
 
 
+def _handle_task_assignment(message: Message) -> Message:
+    """Validate a task assignment and acknowledge its receipt."""
+    payload = message.payload
+
+    if not isinstance(payload, dict):
+        return Message(
+            type=TASK_ACK,
+            sender_id="tcp-server",
+            seq=message.seq,
+            payload={
+                "accepted": False,
+                "error": "TASK_ASSIGN payload must be a dictionary.",
+            },
+            correlation_id=message.correlation_id,
+        )
+
+    task = payload.get("task")
+    task_id = payload.get("task_id")
+
+    if not isinstance(task, dict):
+        return Message(
+            type=TASK_ACK,
+            sender_id="tcp-server",
+            seq=message.seq,
+            payload={
+                "accepted": False,
+                "task_id": task_id,
+                "error": "TASK_ASSIGN payload must contain a task object.",
+            },
+            correlation_id=message.correlation_id,
+        )
+
+    actual_task_id = task.get("task_id")
+
+    if (
+        not isinstance(task_id, str)
+        or not task_id.strip()
+        or actual_task_id != task_id
+    ):
+        return Message(
+            type=TASK_ACK,
+            sender_id="tcp-server",
+            seq=message.seq,
+            payload={
+                "accepted": False,
+                "task_id": task_id,
+                "error": (
+                    "Assignment task_id must match the task object's task_id."
+                ),
+            },
+            correlation_id=message.correlation_id,
+        )
+
+    return Message(
+        type=TASK_ACK,
+        sender_id="tcp-server",
+        seq=message.seq,
+        payload={
+            "accepted": True,
+            "task_id": task_id,
+        },
+        correlation_id=message.correlation_id,
+    )
+
+
 async def handle_client(
     reader: asyncio.StreamReader,
     writer: asyncio.StreamWriter,
@@ -162,6 +227,8 @@ async def handle_client(
 
             if message.type == TASK_REQUEST:
                 response = await _handle_task_request(message, execution_engine)
+            elif message.type == TASK_ASSIGN:
+                response = _handle_task_assignment(message)
             else:
                 response = Message(
                     type="ACK",
