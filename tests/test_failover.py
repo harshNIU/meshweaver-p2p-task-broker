@@ -95,6 +95,7 @@ def test_empty_dead_node_id_is_rejected(node_id):
     with pytest.raises(ValueError, match="dead_node_id"):
         mark_running_tasks_failed(lifecycle, node_id)
 
+
 def test_dead_node_recovery_candidates_preserve_task_identity():
     lifecycle = TaskLifecycle()
     make_running_task(lifecycle, "recover-1", "node-dead")
