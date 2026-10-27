@@ -1,4 +1,8 @@
+<<<<<<< HEAD
 ﻿# Member 4 — Execution Engine Design
+=======
+# Member 4 � Execution Engine Design
+>>>>>>> origin/main
 
 ## Public Interface
 
@@ -45,4 +49,7 @@ The engine is part of the existing MeshWeaver team architecture. Integration wit
 - Timed-out functions may continue running.
 - Cancellation depends on task cooperation.
 - Full distributed reliability and production security are not established by the focused tests.
+<<<<<<< HEAD
 
+=======
+>>>>>>> origin/main

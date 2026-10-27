@@ -1,4 +1,8 @@
+<<<<<<< HEAD
 ﻿# MeshWeaver Task Serialization and Execution
+=======
+# MeshWeaver Task Serialization and Execution
+>>>>>>> origin/main
 
 ## Purpose
 
@@ -43,4 +47,7 @@ These failures remain unresolved.
 - A timed-out synchronous function may continue running.
 - Cancellation requires task cooperation.
 - Full distributed integration and production security are not established by these focused tests.
+<<<<<<< HEAD
 
+=======
+>>>>>>> origin/main

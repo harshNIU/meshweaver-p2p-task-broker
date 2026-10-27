@@ -1,4 +1,8 @@
+<<<<<<< HEAD
 ﻿# Member 4 Viva Notes — Task Serializer and Execution Lead
+=======
+# Member 4 Viva Notes � Task Serializer and Execution Lead
+>>>>>>> origin/main
 
 ## 1. What is MeshWeaver?
 

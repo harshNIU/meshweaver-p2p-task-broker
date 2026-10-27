@@ -23,6 +23,7 @@ from net.messages import (
 from net.peer_manager import PeerConnectionManager
 
 MAX_CACHED_TASK_RESULTS = 1000
+HEARTBEAT_INTERVAL_SECONDS = 5.0
 VALID_NODE_STATES = {"ALIVE", "SUSPECT", "DEAD"}
 
 
@@ -42,6 +43,8 @@ class UDPProtocol(asyncio.DatagramProtocol):
         self._task_results = OrderedDict()
         self._peer_list_seq = int(time.time_ns())
         self._cleanup_task = None
+        self._heartbeat_task = None
+        self._heartbeat_seq = int(time.time_ns())
 
         self.peer_manager = (
             peer_manager if peer_manager is not None else PeerConnectionManager()
@@ -53,6 +56,7 @@ class UDPProtocol(asyncio.DatagramProtocol):
         self.transport = transport
         self._refresh_self_node()
         self._start_peer_cleanup()
+        self._start_peer_heartbeat()
         print(f"UDP node {self.node_id} started")
 
     def _start_peer_cleanup(self):
@@ -61,6 +65,37 @@ class UDPProtocol(asyncio.DatagramProtocol):
             return
 
         self._cleanup_task = asyncio.create_task(self._cleanup_expired_peers_loop())
+
+    def _start_peer_heartbeat(self):
+        """Start periodic heartbeats to known peers."""
+        if self._heartbeat_task is not None and not self._heartbeat_task.done():
+            return
+
+        self._heartbeat_task = asyncio.create_task(self._peer_heartbeat_loop())
+
+    async def _peer_heartbeat_loop(self):
+        """Send periodic PING messages to known peers."""
+        while self.transport is not None and not self.transport.is_closing():
+            await asyncio.sleep(HEARTBEAT_INTERVAL_SECONDS)
+
+            if self.transport is None or self.transport.is_closing():
+                break
+
+            for peer_id, address in list(self.peer_manager.addresses.items()):
+                if peer_id == self.node_id or not address:
+                    continue
+
+                self._heartbeat_seq += 1
+                ping = Message(
+                    type=PING,
+                    sender_id=self.node_id,
+                    seq=self._heartbeat_seq,
+                    payload={"target": peer_id},
+                )
+                try:
+                    self.send_message(ping, address)
+                except (RuntimeError, OSError):
+                    continue
 
     async def _cleanup_expired_peers_loop(self):
         """Periodically remove peers that have exceeded their timeout."""
@@ -133,6 +168,9 @@ class UDPProtocol(asyncio.DatagramProtocol):
 
         message_key = (message.sender_id, message.seq)
 
+        # Any valid structured packet proves the peer is currently reachable.
+        self._record_direct_peer(message.sender_id, addr)
+
         if message_key in self.seen_messages:
             if message.type == TASK_REQUEST:
                 self._resend_cached_task_result(message, addr)
@@ -152,8 +190,6 @@ class UDPProtocol(asyncio.DatagramProtocol):
         self.seen_messages.add(message_key)
         self.received_envelopes.append((message, addr))
         print(f"Received {message.type} from {message.sender_id}")
-
-        self._record_direct_peer(message.sender_id, addr)
 
         if message.type == PING:
             reply = Message(
@@ -233,7 +269,9 @@ class UDPProtocol(asyncio.DatagramProtocol):
 
         if cpu < 0 or ram < 0 or last_seen < 0:
             return None
-        if state not in VALID_NODE_STATES:
+
+        # FIX: Reject non-string states before checking set membership.
+        if not isinstance(state, str) or state not in VALID_NODE_STATES:
             return None
 
         return NodeInfo(
@@ -386,6 +424,11 @@ class UDPProtocol(asyncio.DatagramProtocol):
 
         if task is not None and not task.done():
             task.cancel()
+
+        heartbeat_task = self._heartbeat_task
+        self._heartbeat_task = None
+        if heartbeat_task is not None and not heartbeat_task.done():
+            heartbeat_task.cancel()
 
         self.transport = None
         print(f"UDP node {self.node_id} stopped")
