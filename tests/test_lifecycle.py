@@ -65,3 +65,96 @@ def test_snapshot_matches_dashboard_contract():
         "node": "node-b",
         "attempts": 1,
     }
+
+
+def test_running_task_can_be_reassigned():
+    lifecycle = TaskLifecycle()
+
+    lifecycle.create("task-recover", "demo_task")
+    lifecycle.transition(
+        "task-recover",
+        TaskState.ASSIGNED,
+        node="node-dead",
+    )
+    lifecycle.transition("task-recover", TaskState.RUNNING)
+
+    record = lifecycle.reassign_running(
+        "task-recover",
+        "node-dead",
+        "node-replacement",
+    )
+
+    assert record.task_id == "task-recover"
+    assert record.name == "demo_task"
+    assert record.node == "node-replacement"
+    assert record.state == TaskState.ASSIGNED
+    assert record.attempts == 1
+
+
+def test_completed_task_cannot_be_reassigned():
+    lifecycle = TaskLifecycle()
+
+    lifecycle.create("task-done", "demo_task")
+    lifecycle.transition(
+        "task-done",
+        TaskState.ASSIGNED,
+        node="node-a",
+    )
+    lifecycle.transition("task-done", TaskState.RUNNING)
+    lifecycle.transition("task-done", TaskState.DONE)
+
+    with pytest.raises(ValueError, match="Only running tasks"):
+        lifecycle.reassign_running(
+            "task-done",
+            "node-a",
+            "node-b",
+        )
+
+
+def test_task_cannot_be_reassigned_from_wrong_node():
+    lifecycle = TaskLifecycle()
+
+    lifecycle.create("task-recover", "demo_task")
+    lifecycle.transition(
+        "task-recover",
+        TaskState.ASSIGNED,
+        node="node-a",
+    )
+    lifecycle.transition("task-recover", TaskState.RUNNING)
+
+    with pytest.raises(ValueError, match="dead node"):
+        lifecycle.reassign_running(
+            "task-recover",
+            "node-b",
+            "node-c",
+        )
+
+
+def test_task_cannot_be_reassigned_to_same_node():
+    lifecycle = TaskLifecycle()
+
+    lifecycle.create("task-recover", "demo_task")
+    lifecycle.transition(
+        "task-recover",
+        TaskState.ASSIGNED,
+        node="node-a",
+    )
+    lifecycle.transition("task-recover", TaskState.RUNNING)
+
+    with pytest.raises(ValueError, match="must differ"):
+        lifecycle.reassign_running(
+            "task-recover",
+            "node-a",
+            "node-a",
+        )
+
+
+def test_unknown_task_cannot_be_reassigned():
+    lifecycle = TaskLifecycle()
+
+    with pytest.raises(KeyError, match="Unknown task"):
+        lifecycle.reassign_running(
+            "missing-task",
+            "node-a",
+            "node-b",
+        )
