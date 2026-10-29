@@ -15,9 +15,8 @@ class TaskRecoveryCoordinator:
     The submit callback accepts (replacement_node, original_task) and may
     return a TaskResult directly or an awaitable resolving to TaskResult.
 
-    A submission error is treated as an uncertain execution outcome. The
-    lifecycle is marked FAILED to prevent an automatic duplicate submission.
-    This does not guarantee exactly-once execution.
+    A submission error is treated as an uncertain execution outcome.
+    This coordinator does not guarantee exactly-once execution.
     """
 
     def __init__(
@@ -63,7 +62,7 @@ class TaskRecoveryCoordinator:
             self._tasks[task.task_id] = task
 
     def _mark_failed(self, task_id: str) -> None:
-        """Mark an assigned recovery attempt as failed."""
+        """Mark a reserved recovery attempt as failed."""
         record = self.lifecycle.get(task_id)
         if record is not None and record.state == TaskState.ASSIGNED:
             self.lifecycle.transition(task_id, TaskState.FAILED)
@@ -99,18 +98,16 @@ class TaskRecoveryCoordinator:
                     **self.routing_policy,
                 )
             except NoAvailableNodes:
-                # Keep the task eligible for a later recovery attempt.
                 continue
 
-            # Reserve the task before submitting it. Concurrent recovery
-            # attempts will no longer find it RUNNING on the dead node.
+            # Reserve the task before submission to prevent another recovery
+            # call from selecting the same RUNNING record on the dead node.
             try:
                 with self._lock:
                     self.lifecycle.reassign_running(
                         task_id, dead_node_id, replacement.node_id
                     )
             except (KeyError, ValueError):
-                # Another recovery or lifecycle operation may have won.
                 continue
 
             try:
@@ -131,7 +128,13 @@ class TaskRecoveryCoordinator:
                 ):
                     raise ValueError("Worker returned a non-terminal task result")
 
-            except Exception as exc:
+            except (
+                ConnectionError,
+                TimeoutError,
+                OSError,
+                TypeError,
+                ValueError,
+            ) as exc:
                 self._mark_failed(task_id)
                 results.append(
                     TaskResult(
@@ -148,7 +151,6 @@ class TaskRecoveryCoordinator:
             with self._lock:
                 record = self.lifecycle.get(task_id)
 
-                # Do not overwrite state changed by another operation.
                 if (
                     record is None
                     or record.state != TaskState.ASSIGNED
