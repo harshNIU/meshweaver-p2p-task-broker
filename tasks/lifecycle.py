@@ -90,6 +90,38 @@ class TaskLifecycle:
             record.state = new_state
             return record
 
+    def reassign_running(
+        self,
+        task_id: str,
+        dead_node_id: str,
+        new_node_id: str,
+    ) -> TaskRecord:
+        """Reassign a running task from a dead node to a replacement."""
+        if not isinstance(dead_node_id, str) or not dead_node_id.strip():
+            raise ValueError("dead_node_id must be a non-empty string")
+
+        if not isinstance(new_node_id, str) or not new_node_id.strip():
+            raise ValueError("new_node_id must be a non-empty string")
+
+        if new_node_id == dead_node_id:
+            raise ValueError("new_node_id must differ from dead_node_id")
+
+        with self._lock:
+            record = self._tasks.get(task_id)
+
+            if record is None:
+                raise KeyError(f"Unknown task: {task_id}")
+
+            if record.state != TaskState.RUNNING:
+                raise ValueError("Only running tasks can be reassigned")
+
+            if record.node != dead_node_id:
+                raise ValueError("Task is not assigned to the dead node")
+
+            record.node = new_node_id
+            record.state = TaskState.ASSIGNED
+            return record
+
     def get(self, task_id: str) -> TaskRecord | None:
         """Return a task record, or None if it does not exist."""
         with self._lock:
