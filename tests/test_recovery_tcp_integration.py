@@ -90,10 +90,10 @@ class TCPRecoveryIntegrationTests(unittest.IsolatedAsyncioTestCase):
         return a + b
 
     async def asyncTearDown(self):
-        self.dead_server.close()
-        self.replacement_server.close()
-        await self.dead_server.wait_closed()
-        await self.replacement_server.wait_closed()
+        for server in (self.dead_server, self.replacement_server):
+            server.close()
+            await server.wait_closed()
+
         self.dead_engine.shutdown()
         self.replacement_engine.shutdown()
 
@@ -135,6 +135,32 @@ class TCPRecoveryIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(second, [])
         self.assertEqual(self.executions, [(3, 4)])
         self.assertEqual(len(self.replacement_messages), 1)
+
+    async def test_recovery_handles_unreachable_replacement_worker(self):
+        task = Task(
+            task_name="calculate",
+            args=(10, 5),
+            task_id="tcp-recovery-unreachable-001",
+        )
+        self.coordinator.register(task, self.dead_node.node_id)
+
+        # Close the replacement server to force a real TCP failure.
+        self.replacement_server.close()
+        await self.replacement_server.wait_closed()
+
+        results = await self.coordinator.recover_node(self.dead_node.node_id)
+
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0].task_id, task.task_id)
+        self.assertEqual(results[0].status, TaskStatus.FAILED)
+        self.assertIn("outcome uncertain", results[0].error)
+
+        record = self.lifecycle.get(task.task_id)
+        self.assertEqual(record.state, TaskState.FAILED)
+        self.assertEqual(record.node, self.replacement_node.node_id)
+
+        # The replacement could not accept and execute the task.
+        self.assertEqual(self.executions, [])
 
 
 if __name__ == "__main__":
