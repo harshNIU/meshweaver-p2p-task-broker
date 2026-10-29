@@ -144,7 +144,6 @@ class TCPRecoveryIntegrationTests(unittest.IsolatedAsyncioTestCase):
         )
         self.coordinator.register(task, self.dead_node.node_id)
 
-        # Close the replacement server to force a real TCP failure.
         self.replacement_server.close()
         await self.replacement_server.wait_closed()
 
@@ -158,9 +157,56 @@ class TCPRecoveryIntegrationTests(unittest.IsolatedAsyncioTestCase):
         record = self.lifecycle.get(task.task_id)
         self.assertEqual(record.state, TaskState.FAILED)
         self.assertEqual(record.node, self.replacement_node.node_id)
-
-        # The replacement could not accept and execute the task.
         self.assertEqual(self.executions, [])
+
+    async def test_lost_result_marks_outcome_uncertain_without_resubmitting(self):
+        task = Task(
+            task_name="calculate",
+            args=(19, 23),
+            task_id="tcp-recovery-lost-result-001",
+        )
+        self.coordinator.register(task, self.dead_node.node_id)
+
+        async def execute_then_lose_result(node, original_task):
+            # Execute the task over real TCP, so the replacement worker
+            # performs the calculation before the coordinator loses its result.
+            request = Message(
+                type=TASK_REQUEST,
+                sender_id="recovery-coordinator",
+                seq=101,
+                payload={"task": task_to_dict(original_task)},
+            )
+            response = await send_tcp_message(
+                node.host, node.port, request, timeout=2.0
+            )
+
+            self.assertEqual(response.type, TASK_RESULT)
+            self.assertEqual(response.payload["status"].lower(), "completed")
+            self.assertEqual(response.payload["result"], 42)
+
+            # Simulate the response being lost after successful execution.
+            raise TimeoutError("Simulated lost task result")
+
+        self.coordinator.submit = execute_then_lose_result
+
+        results = await self.coordinator.recover_node(self.dead_node.node_id)
+
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0].task_id, task.task_id)
+        self.assertEqual(results[0].status, TaskStatus.FAILED)
+        self.assertIn("outcome uncertain", results[0].error)
+
+        # The task did execute, even though recovery couldn't confirm it.
+        self.assertEqual(self.executions, [(19, 23)])
+
+        record = self.lifecycle.get(task.task_id)
+        self.assertEqual(record.state, TaskState.FAILED)
+        self.assertEqual(record.node, self.replacement_node.node_id)
+
+        # A repeated recovery must not submit this task again.
+        second = await self.coordinator.recover_node(self.dead_node.node_id)
+        self.assertEqual(second, [])
+        self.assertEqual(self.executions, [(19, 23)])
 
 
 if __name__ == "__main__":
