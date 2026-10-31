@@ -262,8 +262,13 @@ def test_start_bootstrap_joins_seed(monkeypatch):
     transport = FakeTransport()
     calls = {}
 
+    class FakeBootstrapProtocol:
+        def set_tcp_endpoint(self, host, port):
+            calls["tcp_host"] = host
+            calls["tcp_port"] = port
+
     async def fake_start_udp_node(host, port, node_id, execution_engine=None):
-        return transport, object()
+        return transport, FakeBootstrapProtocol()
 
     async def fake_request_peer_list(protocol, node_id, seed, timeout):
         calls.update(
@@ -288,6 +293,8 @@ def test_start_bootstrap_joins_seed(monkeypatch):
 
     assert result.exit_code == 0, result.output
     assert calls["node_id"] == "node-8124"
+    assert calls["tcp_host"] == "127.0.0.1"
+    assert calls["tcp_port"] > 0
     assert calls["seed_host"] == "127.0.0.1"
     assert calls["seed_port"] == 9000
     assert calls["timeout"] == 2.0
