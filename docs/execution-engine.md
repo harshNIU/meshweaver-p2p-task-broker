@@ -1,4 +1,4 @@
-# Member 4 — Execution Engine Design
+# Member 4 â€” Execution Engine Design
 
 ## Public Interface
 

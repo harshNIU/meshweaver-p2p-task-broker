@@ -6,5 +6,4 @@ black==26.10.1
 ruff==0.17.0
 cryptography==50.0.2
 psutil
-
 cloudpickle>=3.0.0
