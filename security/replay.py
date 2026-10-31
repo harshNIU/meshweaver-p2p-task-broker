@@ -1,4 +1,3 @@
-
 """Timestamp and nonce-based replay protection for MeshWeaver."""
 
 import time

@@ -1,4 +1,3 @@
-
 """Trusted-peer registry for MeshWeaver."""
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import (
