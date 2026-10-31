@@ -1,4 +1,3 @@
-
 """Tests for trusted peers and replay protection."""
 
 import pytest

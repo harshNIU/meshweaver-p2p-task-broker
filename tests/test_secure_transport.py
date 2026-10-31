@@ -1,4 +1,3 @@
-
 """Integration tests for authenticated TCP task transport."""
 
 import asyncio
@@ -93,9 +92,7 @@ class TestSecureTransport(unittest.IsolatedAsyncioTestCase):
         return message
 
     async def send_raw_request(self, message):
-        reader, writer = await asyncio.open_connection(
-            *self.server.address
-        )
+        reader, writer = await asyncio.open_connection(*self.server.address)
 
         try:
             await send_message(writer, message)

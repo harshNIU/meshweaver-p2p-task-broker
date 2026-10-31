@@ -1,4 +1,3 @@
-
 import asyncio
 import unittest
 
@@ -7,9 +6,7 @@ from net.udp_node import start_udp_node
 
 class TestUDPSendQueue(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
-        self.transport, self.protocol = await start_udp_node(
-            node_id="queue-test-node"
-        )
+        self.transport, self.protocol = await start_udp_node(node_id="queue-test-node")
 
     async def asyncTearDown(self):
         self.transport.close()
@@ -57,9 +54,7 @@ class TestUDPSendQueue(unittest.IsolatedAsyncioTestCase):
                 return False
 
             def sendto(self, data, address):
-                self.send_times.append(
-                    asyncio.get_running_loop().time()
-                )
+                self.send_times.append(asyncio.get_running_loop().time())
 
         # Stop the original worker.
         self.protocol._send_queue_task.cancel()
@@ -86,12 +81,8 @@ class TestUDPSendQueue(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(len(fake_transport.send_times), 3)
 
-        first_interval = (
-            fake_transport.send_times[1] - fake_transport.send_times[0]
-        )
-        second_interval = (
-            fake_transport.send_times[2] - fake_transport.send_times[1]
-        )
+        first_interval = fake_transport.send_times[1] - fake_transport.send_times[0]
+        second_interval = fake_transport.send_times[2] - fake_transport.send_times[1]
 
         self.assertGreaterEqual(first_interval, 0.08)
         self.assertGreaterEqual(second_interval, 0.08)

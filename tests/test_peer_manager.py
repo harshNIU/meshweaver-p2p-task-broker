@@ -1,4 +1,3 @@
-
 import unittest
 
 from net.peer_manager import PeerConnectionManager
@@ -78,9 +77,7 @@ class TestPeerConnectionManager(unittest.TestCase):
     def test_unknown_peer_has_no_tcp_address(self):
         manager = PeerConnectionManager()
 
-        self.assertIsNone(
-            manager.get_peer_tcp_address("unknown-node")
-        )
+        self.assertIsNone(manager.get_peer_tcp_address("unknown-node"))
 
     def test_expired_peer_tcp_address_is_removed(self):
         manager = PeerConnectionManager(timeout_seconds=10)

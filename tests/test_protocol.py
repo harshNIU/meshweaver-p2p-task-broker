@@ -1,4 +1,3 @@
-
 from gossip.protocol import merge_node_info
 from gossip.state import NodeInfo
 
@@ -40,6 +39,7 @@ def test_merge_keeps_newer_information():
     result = merge_node_info(current, [new_node])
 
     assert result["node-2"].last_seen == 20.0
+
 
 def test_merge_preserves_tcp_port_from_newer_record_without_tcp_port():
     known_node = NodeInfo(

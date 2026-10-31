@@ -1,4 +1,3 @@
-
 import asyncio
 import unittest
 
@@ -20,12 +19,8 @@ class TestUDPTCPFallback(unittest.IsolatedAsyncioTestCase):
         )
         self.tcp_port = self.tcp_server.sockets[0].getsockname()[1]
 
-        self.transport_a, self.protocol_a = await start_udp_node(
-            node_id="node-a"
-        )
-        self.transport_b, self.protocol_b = await start_udp_node(
-            node_id="node-b"
-        )
+        self.transport_a, self.protocol_a = await start_udp_node(node_id="node-a")
+        self.transport_b, self.protocol_b = await start_udp_node(node_id="node-b")
 
         self.udp_address_b = self.transport_b.get_extra_info("sockname")
 
@@ -95,8 +90,7 @@ class TestUDPTCPFallback(unittest.IsolatedAsyncioTestCase):
 
         await self.wait_for_condition(
             lambda: any(
-                received.type == TASK_RESULT
-                and received.seq == 2
+                received.type == TASK_RESULT and received.seq == 2
                 for received, _ in self.protocol_a.received_envelopes
             )
         )

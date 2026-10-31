@@ -1,4 +1,3 @@
-
 """TCP adapter for MeshWeaver's registered-function task executor."""
 
 import asyncio
@@ -36,9 +35,7 @@ async def send_task(
     is verified against the client's trusted-peer registry.
     """
     if secure and (private_key is None or trust_store is None):
-        raise ValueError(
-            "Secure client requires private_key and trust_store"
-        )
+        raise ValueError("Secure client requires private_key and trust_store")
 
     nonce = uuid4().hex
 
@@ -46,10 +43,14 @@ async def send_task(
         TASK_REQUEST,
         sender_id,
         1,
-        {
-            "task": task_to_dict(task),
-            "nonce": nonce,
-        } if secure else {"task": task_to_dict(task)},
+        (
+            {
+                "task": task_to_dict(task),
+                "nonce": nonce,
+            }
+            if secure
+            else {"task": task_to_dict(task)}
+        ),
         ts=time.time(),
     )
 
@@ -67,9 +68,7 @@ async def send_task(
         await send_message(writer, request)
         response = await read_message(reader)
 
-        if response.type != TASK_RESULT or not isinstance(
-            response.payload, dict
-        ):
+        if response.type != TASK_RESULT or not isinstance(response.payload, dict):
             raise ValueError("Invalid task response")
 
         if secure:
@@ -116,9 +115,7 @@ class TaskServer:
             raise ValueError("workers and cache_size must be positive")
 
         if secure and (trust_store is None or private_key is None):
-            raise ValueError(
-                "Secure server requires trust_store and private_key"
-            )
+            raise ValueError("Secure server requires trust_store and private_key")
 
         self.engine = engine
         self._slots = asyncio.Semaphore(workers)
@@ -132,9 +129,7 @@ class TaskServer:
         self.secure = secure
         self.trust_store = trust_store
         self.private_key = private_key
-        self.replay_guard = (
-            replay_guard if replay_guard is not None else ReplayGuard()
-        )
+        self.replay_guard = replay_guard if replay_guard is not None else ReplayGuard()
         self.sender_id = sender_id
 
     async def start(self, host="127.0.0.1", port=0, *, ssl_context=None):
@@ -214,8 +209,7 @@ class TaskServer:
                     pending = asyncio.create_task(self._execute(task))
                     self._running[task.task_id] = pending
                     pending.add_done_callback(
-                        lambda done, key=task.task_id:
-                        self._running.pop(key, None)
+                        lambda done, key=task.task_id: self._running.pop(key, None)
                     )
 
                 result = await asyncio.shield(pending)

@@ -1,4 +1,3 @@
-
 import asyncio
 
 from typer.testing import CliRunner

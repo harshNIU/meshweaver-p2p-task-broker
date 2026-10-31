@@ -1,4 +1,3 @@
-
 """Integration tests for optional TLS in the task transport."""
 
 import datetime
@@ -26,9 +25,11 @@ def create_test_certificate(directory):
         key_size=2048,
     )
 
-    subject = issuer = x509.Name([
-        x509.NameAttribute(NameOID.COMMON_NAME, "localhost"),
-    ])
+    subject = issuer = x509.Name(
+        [
+            x509.NameAttribute(NameOID.COMMON_NAME, "localhost"),
+        ]
+    )
 
     now = datetime.datetime.now(datetime.UTC)
 
@@ -41,10 +42,12 @@ def create_test_certificate(directory):
         .not_valid_before(now - datetime.timedelta(minutes=1))
         .not_valid_after(now + datetime.timedelta(days=1))
         .add_extension(
-            x509.SubjectAlternativeName([
-                x509.DNSName("localhost"),
-                x509.IPAddress(ipaddress.ip_address("127.0.0.1")),
-            ]),
+            x509.SubjectAlternativeName(
+                [
+                    x509.DNSName("localhost"),
+                    x509.IPAddress(ipaddress.ip_address("127.0.0.1")),
+                ]
+            ),
             critical=False,
         )
         .sign(key, hashes.SHA256())
@@ -61,9 +64,7 @@ def create_test_certificate(directory):
         )
     )
 
-    cert_path.write_bytes(
-        certificate.public_bytes(serialization.Encoding.PEM)
-    )
+    cert_path.write_bytes(certificate.public_bytes(serialization.Encoding.PEM))
 
     return cert_path, key_path
 
