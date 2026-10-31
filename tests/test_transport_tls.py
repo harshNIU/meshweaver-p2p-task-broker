@@ -2,7 +2,6 @@
 
 import datetime
 import ipaddress
-import ssl
 import tempfile
 import unittest
 from pathlib import Path
@@ -15,6 +14,7 @@ from cryptography.x509.oid import NameOID
 from execution.engine import ExecutionEngine
 from execution.models import Task
 from gossip.state import NodeInfo
+from security.tls import create_client_context, create_server_context
 from tasks.transport import TaskServer, send_task
 
 
@@ -74,16 +74,8 @@ class TestTransportTLS(unittest.IsolatedAsyncioTestCase):
         self.temp_dir = tempfile.TemporaryDirectory()
         cert_path, key_path = create_test_certificate(self.temp_dir.name)
 
-        self.server_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-        self.server_context.load_cert_chain(
-            certfile=str(cert_path),
-            keyfile=str(key_path),
-        )
-
-        self.client_context = ssl.create_default_context(
-            ssl.Purpose.SERVER_AUTH,
-            cafile=str(cert_path),
-        )
+        self.server_context = create_server_context(cert_path, key_path)
+        self.client_context = create_client_context(cert_path)
 
         self.engine = ExecutionEngine()
         self.engine.register("square", lambda value: value * value)
@@ -118,6 +110,8 @@ class TestTransportTLS(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.status.value, "completed")
 
     async def test_untrusted_client_is_rejected(self):
+        import ssl
+
         untrusted_context = ssl.create_default_context()
 
         with self.assertRaises((ssl.SSLError, OSError)):
