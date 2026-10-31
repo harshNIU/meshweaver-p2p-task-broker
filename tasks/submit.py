@@ -19,7 +19,8 @@ class TaskClient:
     def __init__(self, snapshot, send, *, timeout=5.0, **routing_policy):
         if not math.isfinite(timeout) or timeout <= 0:
             raise ValueError("timeout must be positive")
-        self.snapshot, self.send = snapshot, send
+        self.snapshot = snapshot
+        self.send = send
         self.timeout = timeout
         self.routing_policy = routing_policy
 
@@ -40,31 +41,53 @@ class TaskClient:
         excluded = set()
         attempts = 0
         last_error = "No worker available"
-        for _ in range(task.max_retries + 1):
+
+        for attempt in range(task.max_retries + 1):
             try:
                 peer = select_node(
-                    self.snapshot(), exclude=excluded, **self.routing_policy
+                    self.snapshot(),
+                    exclude=excluded,
+                    **self.routing_policy,
                 )
             except NoAvailableNodes as exc:
                 last_error = str(exc)
+
+                # A temporarily empty eligible snapshot may occur while workers
+                # are being removed or their health information is refreshed.
+                if attempt < task.max_retries:
+                    await asyncio.sleep(0.05)
+                    excluded.clear()
+                    continue
+
                 break
+
             attempts += 1
+
             try:
                 result = await asyncio.wait_for(
-                    self.send(peer, task), task.timeout_seconds or self.timeout
+                    self.send(peer, task),
+                    task.timeout_seconds or self.timeout,
                 )
+
                 if not isinstance(result, TaskResult) or result.task_id != task.task_id:
                     raise ValueError("Worker returned a mismatched task result")
+
                 if result.status not in (
                     TaskStatus.COMPLETED,
                     TaskStatus.FAILED,
                     TaskStatus.CANCELLED,
                 ):
                     raise ValueError("Worker returned a non-terminal task status")
+
                 return replace(result, attempts=attempts)
+
             except (TimeoutError, OSError, EOFError, ValueError) as exc:
                 last_error = f"{type(exc).__name__}: {exc}"
                 excluded.add(peer.node_id)
+
         return TaskResult(
-            task.task_id, TaskStatus.FAILED, attempts=attempts, error=last_error
+            task.task_id,
+            TaskStatus.FAILED,
+            attempts=attempts,
+            error=last_error,
         )

@@ -38,6 +38,7 @@ class TestPeerDiscovery(unittest.IsolatedAsyncioTestCase):
         )
 
         address_b = self.transport_b.get_extra_info("sockname")
+
         self.protocol_a.send_message(
             Message(
                 type=PING,
@@ -51,10 +52,12 @@ class TestPeerDiscovery(unittest.IsolatedAsyncioTestCase):
         await self.wait_for_condition(lambda: "node-c" in self.protocol_a.node_registry)
 
         discovered = self.protocol_a.node_registry["node-c"]
+
         self.assertEqual(discovered.host, "127.0.0.3")
         self.assertEqual(discovered.port, 8003)
 
         self.assertIn("node-b", self.protocol_a.node_registry)
+
         self.assertEqual(
             self.protocol_a.peer_manager.get_peer_address("node-c"),
             ("127.0.0.3", 8003),
@@ -63,6 +66,7 @@ class TestPeerDiscovery(unittest.IsolatedAsyncioTestCase):
     async def test_peer_list_message_merges_valid_records(self):
         """A valid peer-list message adds nodes to the registry."""
         address_a = self.transport_a.get_extra_info("sockname")
+
         message = Message(
             type=PEER_LIST,
             sender_id="node-b",
@@ -87,6 +91,7 @@ class TestPeerDiscovery(unittest.IsolatedAsyncioTestCase):
         await self.wait_for_condition(lambda: "node-c" in self.protocol_a.node_registry)
 
         node = self.protocol_a.node_registry["node-c"]
+
         self.assertEqual(node.host, "127.0.0.3")
         self.assertEqual(node.port, 8003)
         self.assertEqual(node.cpu, 0.25)
@@ -96,6 +101,7 @@ class TestPeerDiscovery(unittest.IsolatedAsyncioTestCase):
     async def test_invalid_peer_records_are_ignored(self):
         """Invalid records must not enter the peer registry."""
         address_a = self.transport_a.get_extra_info("sockname")
+
         message = Message(
             type=PEER_LIST,
             sender_id="node-b",
@@ -168,6 +174,7 @@ class TestPeerDiscovery(unittest.IsolatedAsyncioTestCase):
         )
 
         current = self.protocol_a.node_registry["node-a"]
+
         self.assertEqual(current.host, self_info.host)
         self.assertEqual(current.port, self_info.port)
 
@@ -181,6 +188,7 @@ class TestPeerDiscovery(unittest.IsolatedAsyncioTestCase):
             seq=804,
             payload={"nodes": "not-a-list"},
         )
+
         self.protocol_b.send_message(message, address_a)
 
         await self.wait_for_condition(
@@ -222,6 +230,130 @@ class TestPeerDiscovery(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertNotIn("invalid-state", self.protocol_a.node_registry)
+
+    async def test_peer_list_discovers_tcp_endpoint(self):
+        """A peer-list record advertises and stores its TCP endpoint."""
+        address_a = self.transport_a.get_extra_info("sockname")
+
+        message = Message(
+            type=PEER_LIST,
+            sender_id="node-b",
+            seq=806,
+            payload={
+                "nodes": [
+                    {
+                        "node_id": "node-c",
+                        "host": "127.0.0.3",
+                        "port": 8003,
+                        "tcp_port": 9003,
+                        "last_seen": 200.0,
+                        "state": "ALIVE",
+                    }
+                ]
+            },
+        )
+
+        self.protocol_b.send_message(message, address_a)
+
+        await self.wait_for_condition(
+            lambda: (
+                self.protocol_a.peer_manager.get_peer_tcp_address("node-c") is not None
+            )
+        )
+
+        self.assertEqual(
+            self.protocol_a.peer_manager.get_peer_tcp_address("node-c"),
+            ("127.0.0.3", 9003),
+        )
+
+    async def test_peer_list_without_tcp_port_remains_valid(self):
+        """Older peer records without a TCP port remain supported."""
+        address_a = self.transport_a.get_extra_info("sockname")
+
+        message = Message(
+            type=PEER_LIST,
+            sender_id="node-b",
+            seq=807,
+            payload={
+                "nodes": [
+                    {
+                        "node_id": "node-old",
+                        "host": "127.0.0.5",
+                        "port": 8005,
+                        "last_seen": 200.0,
+                        "state": "ALIVE",
+                    }
+                ]
+            },
+        )
+
+        self.protocol_b.send_message(message, address_a)
+
+        await self.wait_for_condition(
+            lambda: "node-old" in self.protocol_a.node_registry
+        )
+
+        self.assertIsNone(self.protocol_a.peer_manager.get_peer_tcp_address("node-old"))
+
+    async def test_invalid_tcp_port_is_ignored(self):
+        """An invalid TCP port must not enter the peer registry."""
+        address_a = self.transport_a.get_extra_info("sockname")
+
+        message = Message(
+            type=PEER_LIST,
+            sender_id="node-b",
+            seq=808,
+            payload={
+                "nodes": [
+                    {
+                        "node_id": "invalid-tcp",
+                        "host": "127.0.0.6",
+                        "port": 8006,
+                        "tcp_port": 70000,
+                        "last_seen": 200.0,
+                        "state": "ALIVE",
+                    }
+                ]
+            },
+        )
+
+        self.protocol_b.send_message(message, address_a)
+
+        await self.wait_for_condition(
+            lambda: any(
+                received.type == PEER_LIST and received.seq == 808
+                for received, _address in self.protocol_a.received_envelopes
+            )
+        )
+
+        self.assertNotIn("invalid-tcp", self.protocol_a.node_registry)
+
+    async def test_ping_peer_list_advertises_tcp_port(self):
+        """A node's own TCP port is included in its advertised peer record."""
+        self.protocol_b.set_tcp_endpoint("127.0.0.1", 9002)
+
+        address_b = self.transport_b.get_extra_info("sockname")
+
+        self.protocol_a.send_message(
+            Message(
+                type=PING,
+                sender_id="node-a",
+                seq=809,
+                payload={},
+            ),
+            address_b,
+        )
+
+        await self.wait_for_condition(
+            lambda: any(
+                received.type == PEER_LIST
+                and any(
+                    record.get("node_id") == "node-b" and record.get("tcp_port") == 9002
+                    for record in received.payload.get("nodes", [])
+                )
+                for received, _address in self.protocol_a.received_envelopes
+            )
+        )
 
 
 if __name__ == "__main__":
