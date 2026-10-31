@@ -215,6 +215,22 @@ class TestUDPNode(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(len(self.protocol_b.received_envelopes), 2)
 
+    async def test_seen_messages_cache_is_bounded(self):
+        from net.udp_node import MAX_SEEN_MESSAGES
+
+        for seq in range(MAX_SEEN_MESSAGES + 1):
+            self.protocol_b._remember_message(("node-a", seq))
+
+        self.assertEqual(
+            len(self.protocol_b.seen_messages),
+            MAX_SEEN_MESSAGES,
+        )
+        self.assertNotIn(("node-a", 0), self.protocol_b.seen_messages)
+        self.assertIn(
+            ("node-a", MAX_SEEN_MESSAGES),
+            self.protocol_b.seen_messages,
+        )
+
     async def test_task_request_executes_registered_task(self):
         engine = ExecutionEngine()
         engine.register("add", lambda a, b: a + b)

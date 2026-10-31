@@ -14,6 +14,7 @@ from execution.models import Task
 from execution.task_registry import TaskRegistry
 from net.bootstrap import parse_seed_address, request_peer_list
 from net.messages import TASK_REQUEST, TASK_RESULT, Message
+from net.tcp_node import start_tcp_server
 from net.udp_node import start_udp_node
 
 app = typer.Typer(help="MeshWeaver P2P Task Broker")
@@ -153,16 +154,32 @@ def start(
     engine = _create_engine()
 
     async def run_node():
-        transport, protocol = await start_udp_node(
-            host=host,
-            port=port,
-            node_id=node_id or f"node-{port}",
-            execution_engine=engine,
-        )
-
+        transport = None
+        protocol = None
+        tcp_server = None
         dashboard = None
 
         try:
+            transport, protocol = await start_udp_node(
+                host=host,
+                port=port,
+                node_id=node_id or f"node-{port}",
+                execution_engine=engine,
+            )
+
+            # Bind TCP independently. Port 0 asks the OS for an available port;
+            # the actual bound port is advertised to UDP peers below.
+            tcp_server, _ = await start_tcp_server(
+                host=host,
+                port=0,
+                execution_engine=engine,
+            )
+            if not tcp_server.sockets:
+                raise RuntimeError("TCP server started without a listening socket.")
+
+            tcp_port = tcp_server.sockets[0].getsockname()[1]
+            protocol.set_tcp_endpoint(host, tcp_port)
+
             if seed:
                 seed_address = parse_seed_address(seed)
                 await request_peer_list(
@@ -172,6 +189,7 @@ def start(
                 )
 
             typer.echo(f"MeshWeaver node running at {host}:{port}")
+            typer.echo(f"TCP server listening at {host}:{tcp_port}")
 
             if web:
                 from web.server import create_dashboard_server
@@ -238,7 +256,13 @@ def start(
                 elif hasattr(dashboard, "close"):
                     dashboard.close()
 
-            transport.close()
+            if tcp_server is not None:
+                tcp_server.close()
+                await tcp_server.wait_closed()
+
+            if transport is not None:
+                transport.close()
+
             engine.shutdown(wait=False, cancel_futures=True)
 
     try:

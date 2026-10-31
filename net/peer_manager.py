@@ -14,9 +14,10 @@ class PeerConnectionManager:
         self.timeout_seconds = timeout_seconds
         self.peers = {}
         self.addresses = {}
+        self.tcp_addresses = {}
 
     def record_activity(self, peer_id, now=None, address=None):
-        """Record peer activity and optionally update its network address."""
+        """Record peer activity and optionally update its UDP address."""
         if now is None:
             now = time.monotonic()
 
@@ -26,8 +27,19 @@ class PeerConnectionManager:
             self.addresses[peer_id] = address
 
     def get_peer_address(self, peer_id):
-        """Return a known peer address, or None if unknown."""
+        """Return a known UDP address, or None if unknown."""
         return self.addresses.get(peer_id)
+
+    def record_tcp_address(self, peer_id, address):
+        """Record a peer's TCP address."""
+        if address is None:
+            self.tcp_addresses.pop(peer_id, None)
+        else:
+            self.tcp_addresses[peer_id] = address
+
+    def get_peer_tcp_address(self, peer_id):
+        """Return a known TCP address, or None if unknown."""
+        return self.tcp_addresses.get(peer_id)
 
     def get_expired_peers(self, now=None):
         """Return peer IDs that have exceeded the timeout."""
@@ -47,6 +59,7 @@ class PeerConnectionManager:
         for peer_id in expired:
             del self.peers[peer_id]
             self.addresses.pop(peer_id, None)
+            self.tcp_addresses.pop(peer_id, None)
 
         return expired
 

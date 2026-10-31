@@ -1,3 +1,4 @@
+
 import json
 from dataclasses import fields
 
@@ -98,4 +99,16 @@ def test_node_info_contract_fields():
         "ram",
         "last_seen",
         "state",
+        "tcp_port",
     }
+
+
+def test_node_info_tcp_port_defaults_to_none():
+    """Verify TCP port is optional for backward compatibility."""
+    node = NodeInfo(
+        node_id="node-1",
+        host="127.0.0.1",
+        port=8000,
+    )
+
+    assert node.tcp_port is None

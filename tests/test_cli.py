@@ -1,3 +1,4 @@
+
 import asyncio
 
 from typer.testing import CliRunner
@@ -16,12 +17,34 @@ class FakeTransport:
         self.closed = True
 
 
+class FakeSocket:
+    def getsockname(self):
+        return ("127.0.0.1", 9002)
+
+
+class FakeTCPServer:
+    def __init__(self):
+        self.sockets = [FakeSocket()]
+        self.closed = False
+        self.waited = False
+
+    def close(self):
+        self.closed = True
+
+    async def wait_closed(self):
+        self.waited = True
+
+
 class FakeProtocol:
     def __init__(self, response=None):
         self.transport = None
         self.received_envelopes = []
         self.sent_messages = []
         self.response = response
+        self.tcp_endpoint = None
+
+    def set_tcp_endpoint(self, host, port):
+        self.tcp_endpoint = (host, port)
 
     def send_message(self, message, address):
         self.sent_messages.append((message, address))
@@ -64,6 +87,8 @@ def install_fake_node(monkeypatch, protocol, transport):
 def test_start_command(monkeypatch):
     calls = {}
     transport = FakeTransport()
+    protocol = FakeProtocol()
+    tcp_server = FakeTCPServer()
 
     async def fake_start_udp_node(host, port, node_id, execution_engine=None):
         calls.update(
@@ -72,12 +97,23 @@ def test_start_command(monkeypatch):
             node_id=node_id,
             execution_engine=execution_engine,
         )
-        return transport, object()
+        return transport, protocol
+
+    async def fake_start_tcp_server(
+        host="127.0.0.1",
+        port=0,
+        execution_engine=None,
+    ):
+        calls["tcp_host"] = host
+        calls["tcp_port_requested"] = port
+        calls["tcp_execution_engine"] = execution_engine
+        return tcp_server, []
 
     async def finish_wait(self):
         return None
 
     monkeypatch.setattr("cli.main.start_udp_node", fake_start_udp_node)
+    monkeypatch.setattr("cli.main.start_tcp_server", fake_start_tcp_server)
     monkeypatch.setattr("cli.main.asyncio.Event.wait", finish_wait)
 
     result = runner.invoke(app, ["start", "--port", "8123"])
@@ -87,7 +123,15 @@ def test_start_command(monkeypatch):
     assert calls["port"] == 8123
     assert calls["node_id"] == "node-8123"
     assert calls["execution_engine"] is not None
+
+    assert calls["tcp_host"] == "127.0.0.1"
+    assert calls["tcp_port_requested"] == 0
+    assert calls["tcp_execution_engine"] is calls["execution_engine"]
+
+    assert protocol.tcp_endpoint == ("127.0.0.1", 9002)
     assert transport.closed
+    assert tcp_server.closed
+    assert tcp_server.waited
 
 
 def test_start_rejects_invalid_port():
