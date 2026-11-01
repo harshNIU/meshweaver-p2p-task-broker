@@ -34,6 +34,7 @@ def test_refresh_self_metrics(monkeypatch):
     assert updated_node.cpu == 25.0
     assert updated_node.ram == 60.0
 
+
 def test_merge_nodes_adds_new_node():
     local_node = NodeInfo(
         node_id="node-1",

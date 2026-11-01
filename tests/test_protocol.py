@@ -44,9 +44,7 @@ def test_merge_preserves_newer_existing_information():
 
 def test_merge_updates_cpu_and_ram_with_newer_data():
     current = {"node-1": make_node("node-1", last_seen=100.0)}
-    incoming = [
-        make_node("node-1", last_seen=200.0, cpu=50.0, ram=60.0)
-    ]
+    incoming = [make_node("node-1", last_seen=200.0, cpu=50.0, ram=60.0)]
 
     result = merge_node_info(current, incoming)
 

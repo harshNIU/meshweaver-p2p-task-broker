@@ -54,10 +54,12 @@ def test_merge_nodes_does_not_replace_local_node():
 
 def test_remove_dead_nodes_keeps_alive_nodes():
     engine = GossipEngine(make_node("self"))
-    engine.merge_nodes([
-        make_node("alive", state="ALIVE"),
-        make_node("dead", state="DEAD"),
-    ])
+    engine.merge_nodes(
+        [
+            make_node("alive", state="ALIVE"),
+            make_node("dead", state="DEAD"),
+        ]
+    )
 
     removed = engine.remove_dead_nodes()
 
