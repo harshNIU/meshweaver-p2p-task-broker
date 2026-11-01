@@ -23,3 +23,14 @@ htmlcov/
 .vscode/
 .DS_Store
 Thumbs.db
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.venv/
+venv/
+
+# MeshWeaver development certificates
+certs/
+*.pem
+*.key
