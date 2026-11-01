@@ -50,9 +50,8 @@ class UDPProtocol(asyncio.DatagramProtocol):
         if send_queue_size <= 0:
             raise ValueError("send_queue_size must be greater than zero")
 
-        if (
-            not isinstance(send_rate_limit, (int, float))
-            or isinstance(send_rate_limit, bool)
+        if not isinstance(send_rate_limit, (int, float)) or isinstance(
+            send_rate_limit, bool
         ):
             raise TypeError("send_rate_limit must be a positive number")
         if not math.isfinite(send_rate_limit) or send_rate_limit <= 0:
@@ -576,10 +575,8 @@ class UDPProtocol(asyncio.DatagramProtocol):
         except (OSError, ConnectionError, ValueError, TimeoutError) as exc:
             self.tcp_send_errors.append((message, tcp_address, exc))
             print(
-                f"TCP send failed from node {self.node_id} to "
-                f"{tcp_address}: {exc}"
+                f"TCP send failed from node {self.node_id} to " f"{tcp_address}: {exc}"
             )
-
 
     def _track_tcp_send_task(self, task):
         """Keep TCP send tasks referenced until they finish."""
@@ -620,7 +617,6 @@ class UDPProtocol(asyncio.DatagramProtocol):
             self.send_queue.put_nowait((data, address))
         except asyncio.QueueFull as exc:
             raise BufferError("UDP send queue is full") from exc
-
 
 
 async def start_udp_node(

@@ -1,4 +1,3 @@
-
 """Track peer activity, addresses, and connection timeouts."""
 
 import time

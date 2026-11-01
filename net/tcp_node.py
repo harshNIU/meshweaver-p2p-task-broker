@@ -178,11 +178,7 @@ def _handle_task_assignment(message: Message) -> Message:
 
     actual_task_id = task.get("task_id")
 
-    if (
-        not isinstance(task_id, str)
-        or not task_id.strip()
-        or actual_task_id != task_id
-    ):
+    if not isinstance(task_id, str) or not task_id.strip() or actual_task_id != task_id:
         return Message(
             type=TASK_ACK,
             sender_id="tcp-server",
@@ -190,9 +186,7 @@ def _handle_task_assignment(message: Message) -> Message:
             payload={
                 "accepted": False,
                 "task_id": task_id,
-                "error": (
-                    "Assignment task_id must match the task object's task_id."
-                ),
+                "error": ("Assignment task_id must match the task object's task_id."),
             },
             correlation_id=message.correlation_id,
         )
