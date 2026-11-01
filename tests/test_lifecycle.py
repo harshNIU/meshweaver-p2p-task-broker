@@ -158,3 +158,69 @@ def test_unknown_task_cannot_be_reassigned():
             "node-a",
             "node-b",
         )
+
+
+def test_lifecycle_restores_persisted_task_record():
+    lifecycle = TaskLifecycle()
+
+    record = lifecycle.restore(
+        task_id="restored-1",
+        name="calculate",
+        state=TaskState.RUNNING,
+        node="node-a",
+        attempts=2,
+    )
+
+    assert record.task_id == "restored-1"
+    assert record.name == "calculate"
+    assert record.state == TaskState.RUNNING
+    assert record.node == "node-a"
+    assert record.attempts == 2
+
+
+def test_lifecycle_rejects_duplicate_restored_task():
+    lifecycle = TaskLifecycle()
+    lifecycle.create("restored-2", "calculate")
+
+    with pytest.raises(ValueError, match="already exists"):
+        lifecycle.restore(
+            task_id="restored-2",
+            name="calculate",
+            state=TaskState.RUNNING,
+            node="node-a",
+            attempts=1,
+        )
+
+
+def test_lifecycle_rejects_invalid_restored_state():
+    lifecycle = TaskLifecycle()
+
+    with pytest.raises(TypeError, match="TaskState"):
+        lifecycle.restore(
+            task_id="restored-3",
+            name="calculate",
+            state="RUNNING",
+            node="node-a",
+            attempts=1,
+        )
+
+
+def test_lifecycle_loads_records_from_sqlite_store(tmp_path):
+    from tasks.store import SQLiteTaskStore
+
+    store = SQLiteTaskStore(tmp_path / "lifecycle.db")
+    store.save(
+        "persisted-1",
+        "calculate",
+        TaskState.RUNNING,
+        "node-a",
+        2,
+    )
+
+    lifecycle = TaskLifecycle(store=store)
+
+    record = lifecycle.get("persisted-1")
+    assert record is not None
+    assert record.state == TaskState.RUNNING
+    assert record.node == "node-a"
+    assert record.attempts == 2

@@ -1,13 +1,10 @@
-
 """Reliable TCP task-assignment handshake with retry and backoff."""
 
 import asyncio
 from typing import Any
 
-from net.correlation import RequestTimeoutError
-from net.messages import Message, TASK_ASSIGN, TASK_ACK
+from net.messages import TASK_ACK, TASK_ASSIGN, Message
 from net.tcp_node import send_tcp_message
-
 
 DEFAULT_TIMEOUT = 3.0
 DEFAULT_MAX_RETRIES = 3
@@ -59,9 +56,7 @@ async def assign_task(
         )
 
         try:
-            response = await send_tcp_message(
-                host, port, request, timeout=timeout
-            )
+            response = await send_tcp_message(host, port, request, timeout=timeout)
 
             if response.type != TASK_ACK:
                 raise TaskAssignmentError(
@@ -92,7 +87,7 @@ async def assign_task(
                 raise
 
             if attempt < max_retries:
-                await asyncio.sleep(backoff * (2 ** attempt))
+                await asyncio.sleep(backoff * (2**attempt))
 
     raise TaskAssignmentError(
         f"Could not assign task {task_id!r} after "

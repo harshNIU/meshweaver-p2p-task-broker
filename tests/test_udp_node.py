@@ -1,3 +1,5 @@
+"""Tests for UDP networking, task execution, and message authentication."""
+
 import asyncio
 import json
 import unittest
@@ -7,12 +9,21 @@ from execution.models import Task
 from execution.serializer import serialize_task
 from net.messages import PING, PONG, TASK_REQUEST, TASK_RESULT, Message
 from net.udp_node import start_udp_node
+from security.message_signing import sign_message, verify_message
+
+TEST_SECRET = b"meshweaver-test-secret-32-bytes!!"
 
 
 class TestUDPNode(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
-        self.transport_a, self.protocol_a = await start_udp_node(node_id="node-a")
-        self.transport_b, self.protocol_b = await start_udp_node(node_id="node-b")
+        self.transport_a, self.protocol_a = await start_udp_node(
+            node_id="node-a",
+            secret=TEST_SECRET,
+        )
+        self.transport_b, self.protocol_b = await start_udp_node(
+            node_id="node-b",
+            secret=TEST_SECRET,
+        )
 
     async def asyncTearDown(self):
         self.transport_a.close()
@@ -29,6 +40,17 @@ class TestUDPNode(unittest.IsolatedAsyncioTestCase):
                 self.fail("Timed out waiting for UDP communication")
 
             await asyncio.sleep(0.02)
+
+    def make_signed_request(self, task, sender_id, seq):
+        """Create a signed UDP task request."""
+        request = Message(
+            type=TASK_REQUEST,
+            sender_id=sender_id,
+            seq=seq,
+            payload={"task": json.loads(serialize_task(task))},
+        )
+        sign_message(request, TEST_SECRET)
+        return request
 
     async def test_two_nodes_exchange_plain_text_messages(self):
         address_b = self.transport_b.get_extra_info("sockname")
@@ -225,16 +247,12 @@ class TestUDPNode(unittest.IsolatedAsyncioTestCase):
         self.transport_b, self.protocol_b = await start_udp_node(
             node_id="node-b",
             execution_engine=engine,
+            secret=TEST_SECRET,
         )
-        address_b = self.transport_b.get_extra_info("sockname")
 
+        address_b = self.transport_b.get_extra_info("sockname")
         task = Task(task_name="add", args=(2, 3))
-        request = Message(
-            type=TASK_REQUEST,
-            sender_id="node-a",
-            seq=200,
-            payload={"task": json.loads(serialize_task(task))},
-        )
+        request = self.make_signed_request(task, "node-a", 200)
 
         self.protocol_a.send_message(request, address_b)
 
@@ -254,17 +272,12 @@ class TestUDPNode(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.payload["task_id"], task.task_id)
         self.assertEqual(result.payload["status"], "completed")
         self.assertEqual(result.payload["value"], 5)
+        self.assertTrue(verify_message(result, TEST_SECRET))
 
     async def test_task_request_unknown_task_returns_failure(self):
         address_b = self.transport_b.get_extra_info("sockname")
         task = Task(task_name="unknown_task")
-
-        request = Message(
-            type=TASK_REQUEST,
-            sender_id="node-a",
-            seq=201,
-            payload={"task": json.loads(serialize_task(task))},
-        )
+        request = self.make_signed_request(task, "node-a", 201)
 
         self.protocol_a.send_message(request, address_b)
 
@@ -292,6 +305,7 @@ class TestUDPNode(unittest.IsolatedAsyncioTestCase):
             seq=300,
             payload={"task": "not-a-task-object"},
         )
+        sign_message(request, TEST_SECRET)
 
         self.protocol_a.send_message(request, address_b)
 
@@ -323,19 +337,16 @@ class TestUDPNode(unittest.IsolatedAsyncioTestCase):
 
         self.transport_b.close()
         await asyncio.sleep(0)
+
         self.transport_b, self.protocol_b = await start_udp_node(
             node_id="node-b",
             execution_engine=engine,
+            secret=TEST_SECRET,
         )
-        address_b = self.transport_b.get_extra_info("sockname")
 
+        address_b = self.transport_b.get_extra_info("sockname")
         task = Task(task_name="count_call")
-        request = Message(
-            type=TASK_REQUEST,
-            sender_id="node-a",
-            seq=301,
-            payload={"task": json.loads(serialize_task(task))},
-        )
+        request = self.make_signed_request(task, "node-a", 301)
 
         self.protocol_a.send_message(request, address_b)
 
@@ -387,27 +398,18 @@ class TestUDPNode(unittest.IsolatedAsyncioTestCase):
 
         self.transport_b.close()
         await asyncio.sleep(0)
+
         self.transport_b, self.protocol_b = await start_udp_node(
             node_id="node-b",
             execution_engine=engine,
+            secret=TEST_SECRET,
         )
+
         address_b = self.transport_b.get_extra_info("sockname")
-
         task = Task(task_name="count_call")
-        task_payload = json.loads(serialize_task(task))
 
-        first_request = Message(
-            type=TASK_REQUEST,
-            sender_id="node-a",
-            seq=302,
-            payload={"task": task_payload},
-        )
-        second_request = Message(
-            type=TASK_REQUEST,
-            sender_id="node-a",
-            seq=303,
-            payload={"task": task_payload},
-        )
+        first_request = self.make_signed_request(task, "node-a", 302)
+        second_request = self.make_signed_request(task, "node-a", 303)
 
         self.protocol_a.send_message(first_request, address_b)
 
@@ -435,6 +437,142 @@ class TestUDPNode(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(len(calls), 1)
         self.assertEqual(second_result.payload["value"], 1)
+
+    async def test_unsigned_task_request_is_rejected(self):
+        address_b = self.transport_b.get_extra_info("sockname")
+        task = Task(task_name="unknown_task")
+
+        request = Message(
+            type=TASK_REQUEST,
+            sender_id="unsigned-client",
+            seq=901,
+            payload={"task": json.loads(serialize_task(task))},
+        )
+
+        self.protocol_a.send_message(request, address_b)
+        await asyncio.sleep(0.1)
+
+        self.assertNotIn(
+            "unsigned-client",
+            self.protocol_b.peer_manager.peers,
+        )
+        self.assertNotIn(
+            ("unsigned-client", 901),
+            self.protocol_b.seen_messages,
+        )
+
+    async def test_tampered_task_request_is_rejected(self):
+        address_b = self.transport_b.get_extra_info("sockname")
+        task = Task(task_name="unknown_task")
+
+        request = self.make_signed_request(
+            task,
+            "tampered-client",
+            902,
+        )
+
+        request.payload["task"]["task_name"] = "tampered_task"
+
+        self.protocol_a.send_message(request, address_b)
+        await asyncio.sleep(0.1)
+
+        self.assertNotIn(
+            ("tampered-client", 902),
+            self.protocol_b.seen_messages,
+        )
+        self.assertNotIn(
+            "tampered-client",
+            self.protocol_b.peer_manager.peers,
+        )
+
+    async def test_signed_task_request_executes_successfully(self):
+        engine = ExecutionEngine()
+        engine.register("add", lambda a, b: a + b)
+
+        self.transport_b.close()
+        await asyncio.sleep(0)
+
+        self.transport_b, self.protocol_b = await start_udp_node(
+            node_id="node-b",
+            execution_engine=engine,
+            secret=TEST_SECRET,
+        )
+
+        address_b = self.transport_b.get_extra_info("sockname")
+        task = Task(task_name="add", args=(10, 20))
+        request = self.make_signed_request(task, "signed-client", 903)
+
+        self.protocol_a.send_message(request, address_b)
+
+        await self.wait_for_condition(
+            lambda: any(
+                message.type == TASK_RESULT and message.seq == 903
+                for message, _address in self.protocol_a.received_envelopes
+            )
+        )
+
+        result = next(
+            message
+            for message, _address in self.protocol_a.received_envelopes
+            if message.type == TASK_RESULT and message.seq == 903
+        )
+
+        self.assertEqual(result.payload["status"], "completed")
+        self.assertEqual(result.payload["value"], 30)
+        self.assertTrue(verify_message(result, TEST_SECRET))
+
+    async def test_wrong_secret_task_request_is_rejected(self):
+        address_b = self.transport_b.get_extra_info("sockname")
+        task = Task(task_name="unknown_task")
+
+        request = Message(
+            type=TASK_REQUEST,
+            sender_id="wrong-secret-client",
+            seq=904,
+            payload={"task": json.loads(serialize_task(task))},
+        )
+
+        sign_message(
+            request,
+            b"another-test-secret-which-is-32-bytes!!",
+        )
+
+        self.protocol_a.send_message(request, address_b)
+        await asyncio.sleep(0.1)
+
+        self.assertNotIn(
+            ("wrong-secret-client", 904),
+            self.protocol_b.seen_messages,
+        )
+
+    async def test_signed_result_is_rejected_by_wrong_secret_receiver(self):
+        wrong_secret = b"another-test-secret-which-is-32-bytes!!"
+
+        result = Message(
+            type=TASK_RESULT,
+            sender_id="untrusted-node",
+            seq=905,
+            payload={"task_id": "test-task", "status": "completed"},
+        )
+
+        sign_message(result, wrong_secret)
+
+        address_a = self.transport_a.get_extra_info("sockname")
+        self.protocol_b.send_message(result, address_a)
+
+        await asyncio.sleep(0.1)
+
+        self.assertFalse(
+            any(
+                message.type == TASK_RESULT and message.seq == 905
+                for message, _address in self.protocol_a.received_envelopes
+            )
+        )
+
+        self.assertNotIn(
+            ("untrusted-node", 905),
+            self.protocol_a.seen_messages,
+        )
 
 
 if __name__ == "__main__":
