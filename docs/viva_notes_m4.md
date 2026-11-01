@@ -1,4 +1,4 @@
-# Member 4 Viva Notes � Task Serializer and Execution Lead
+ï»¿# Member 4 Viva Notes â€” Task Serializer and Execution Lead
 
 ## 1. What is MeshWeaver?
 

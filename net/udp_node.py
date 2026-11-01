@@ -21,39 +21,103 @@ from net.messages import (
     Message,
 )
 from net.peer_manager import PeerConnectionManager
+from net.tcp_node import send_tcp_message
 
 MAX_CACHED_TASK_RESULTS = 1000
+MAX_SEEN_MESSAGES = 10000
+# Conservative UDP payload threshold to avoid IP fragmentation.
+MAX_UDP_MESSAGE_SIZE = 1200
+HEARTBEAT_INTERVAL_SECONDS = 5.0
 VALID_NODE_STATES = {"ALIVE", "SUSPECT", "DEAD"}
+DEFAULT_SEND_QUEUE_SIZE = 100
+DEFAULT_SEND_RATE_LIMIT = 100.0
 
 
 class UDPProtocol(asyncio.DatagramProtocol):
     """Receive UDP messages, track peers, and process task requests."""
 
-    def __init__(self, node_id="node", peer_manager=None, execution_engine=None):
+    def __init__(
+        self,
+        node_id="node",
+        peer_manager=None,
+        execution_engine=None,
+        send_queue_size=DEFAULT_SEND_QUEUE_SIZE,
+        send_rate_limit=DEFAULT_SEND_RATE_LIMIT,
+    ):
+        """Initialize the UDP protocol and its bounded outgoing queue."""
+        if not isinstance(send_queue_size, int) or isinstance(send_queue_size, bool):
+            raise TypeError("send_queue_size must be a positive integer")
+        if send_queue_size <= 0:
+            raise ValueError("send_queue_size must be greater than zero")
+
+        if not isinstance(send_rate_limit, (int, float)) or isinstance(
+            send_rate_limit, bool
+        ):
+            raise TypeError("send_rate_limit must be a positive number")
+        if not math.isfinite(send_rate_limit) or send_rate_limit <= 0:
+            raise ValueError("send_rate_limit must be finite and greater than zero")
+
         self.transport = None
         self.node_id = node_id
         self.execution_engine = (
             execution_engine if execution_engine is not None else ExecutionEngine()
         )
 
+        self.send_rate_limit = float(send_rate_limit)
+        self.send_queue = asyncio.Queue(maxsize=send_queue_size)
+        self._send_queue_task = None
+
         self.received_messages = []
         self.received_envelopes = []
-        self.seen_messages = set()
+        self.tcp_send_errors = []
+        self._tcp_send_tasks = set()
+        self.seen_messages = OrderedDict()
         self._task_results = OrderedDict()
         self._peer_list_seq = int(time.time_ns())
         self._cleanup_task = None
+        self._heartbeat_task = None
+        self._heartbeat_seq = int(time.time_ns())
 
         self.peer_manager = (
             peer_manager if peer_manager is not None else PeerConnectionManager()
         )
         self.node_registry = {}
+        self.tcp_host = None
+        self.tcp_port = None
 
     def connection_made(self, transport):
         """Store the UDP transport and start background peer cleanup."""
         self.transport = transport
         self._refresh_self_node()
+        self._start_send_queue_worker()
         self._start_peer_cleanup()
+        self._start_peer_heartbeat()
         print(f"UDP node {self.node_id} started")
+
+    def _start_send_queue_worker(self):
+        """Start the background task that drains the outgoing UDP queue."""
+        if self._send_queue_task is not None and not self._send_queue_task.done():
+            return
+
+        self._send_queue_task = asyncio.create_task(self._send_queue_worker())
+
+    async def _send_queue_worker(self):
+        """Send queued datagrams in FIFO order while respecting the rate limit."""
+        send_interval = 1.0 / self.send_rate_limit
+
+        while self.transport is not None and not self.transport.is_closing():
+            data, address = await self.send_queue.get()
+            try:
+                transport = self.transport
+                if transport is None or transport.is_closing():
+                    continue
+
+                transport.sendto(data, address)
+                await asyncio.sleep(send_interval)
+            except OSError as exc:
+                print(f"UDP send failed for node {self.node_id}: {exc}")
+            finally:
+                self.send_queue.task_done()
 
     def _start_peer_cleanup(self):
         """Start the periodic stale-peer cleanup task."""
@@ -61,6 +125,37 @@ class UDPProtocol(asyncio.DatagramProtocol):
             return
 
         self._cleanup_task = asyncio.create_task(self._cleanup_expired_peers_loop())
+
+    def _start_peer_heartbeat(self):
+        """Start periodic heartbeats to known peers."""
+        if self._heartbeat_task is not None and not self._heartbeat_task.done():
+            return
+
+        self._heartbeat_task = asyncio.create_task(self._peer_heartbeat_loop())
+
+    async def _peer_heartbeat_loop(self):
+        """Send periodic PING messages to known peers."""
+        while self.transport is not None and not self.transport.is_closing():
+            await asyncio.sleep(HEARTBEAT_INTERVAL_SECONDS)
+
+            if self.transport is None or self.transport.is_closing():
+                break
+
+            for peer_id, address in list(self.peer_manager.addresses.items()):
+                if peer_id == self.node_id or not address:
+                    continue
+
+                self._heartbeat_seq += 1
+                ping = Message(
+                    type=PING,
+                    sender_id=self.node_id,
+                    seq=self._heartbeat_seq,
+                    payload={"target": peer_id},
+                )
+                try:
+                    self.send_message(ping, address)
+                except (RuntimeError, OSError):
+                    continue
 
     async def _cleanup_expired_peers_loop(self):
         """Periodically remove peers that have exceeded their timeout."""
@@ -80,6 +175,22 @@ class UDPProtocol(asyncio.DatagramProtocol):
                     f"{', '.join(removed)}"
                 )
 
+    def set_tcp_endpoint(self, host, port):
+        """Register this node's TCP endpoint for peer discovery."""
+        if not isinstance(host, str) or not host.strip():
+            raise ValueError("TCP host must be a non-empty string")
+
+        if (
+            not isinstance(port, int)
+            or isinstance(port, bool)
+            or not 1 <= port <= 65535
+        ):
+            raise ValueError("TCP port must be between 1 and 65535")
+
+        self.tcp_host = host
+        self.tcp_port = port
+        self._refresh_self_node()
+
     def _refresh_self_node(self):
         """Update this node's advertised address in the registry."""
         if self.transport is None:
@@ -93,12 +204,13 @@ class UDPProtocol(asyncio.DatagramProtocol):
         existing = self.node_registry.get(self.node_id)
         self.node_registry[self.node_id] = NodeInfo(
             node_id=self.node_id,
-            host=address[0],
+            host=self.tcp_host or address[0],
             port=address[1],
             cpu=existing.cpu if existing else 0.0,
             ram=existing.ram if existing else 0.0,
             last_seen=now,
             state="ALIVE",
+            tcp_port=self.tcp_port,
         )
 
     def _record_direct_peer(self, peer_id, address):
@@ -118,8 +230,17 @@ class UDPProtocol(asyncio.DatagramProtocol):
             ram=existing.ram if existing else 0.0,
             last_seen=time.time(),
             state="ALIVE",
+            tcp_port=existing.tcp_port if existing else None,
         )
         merge_node_info(self.node_registry, [node])
+
+    def _remember_message(self, message_key):
+        """Remember a message while keeping the duplicate cache bounded."""
+        self.seen_messages[message_key] = None
+        self.seen_messages.move_to_end(message_key)
+
+        while len(self.seen_messages) > MAX_SEEN_MESSAGES:
+            self.seen_messages.popitem(last=False)
 
     def datagram_received(self, data, addr):
         """Handle incoming plain-text or structured UDP messages."""
@@ -132,6 +253,9 @@ class UDPProtocol(asyncio.DatagramProtocol):
             return
 
         message_key = (message.sender_id, message.seq)
+
+        # Any valid structured packet proves the peer is currently reachable.
+        self._record_direct_peer(message.sender_id, addr)
 
         if message_key in self.seen_messages:
             if message.type == TASK_REQUEST:
@@ -149,11 +273,9 @@ class UDPProtocol(asyncio.DatagramProtocol):
                 )
             return
 
-        self.seen_messages.add(message_key)
+        self._remember_message(message_key)
         self.received_envelopes.append((message, addr))
         print(f"Received {message.type} from {message.sender_id}")
-
-        self._record_direct_peer(message.sender_id, addr)
 
         if message.type == PING:
             reply = Message(
@@ -206,6 +328,7 @@ class UDPProtocol(asyncio.DatagramProtocol):
         node_id = record.get("node_id")
         host = record.get("host")
         port = record.get("port")
+        tcp_port = record.get("tcp_port")
         cpu = record.get("cpu", 0.0)
         ram = record.get("ram", 0.0)
         last_seen = record.get("last_seen", time.time())
@@ -222,6 +345,14 @@ class UDPProtocol(asyncio.DatagramProtocol):
         ):
             return None
 
+        # TCP is optional so older peer records remain compatible.
+        if tcp_port is not None and (
+            not isinstance(tcp_port, int)
+            or isinstance(tcp_port, bool)
+            or not 1 <= tcp_port <= 65535
+        ):
+            return None
+
         numeric_values = (cpu, ram, last_seen)
         if any(
             isinstance(value, bool)
@@ -233,7 +364,9 @@ class UDPProtocol(asyncio.DatagramProtocol):
 
         if cpu < 0 or ram < 0 or last_seen < 0:
             return None
-        if state not in VALID_NODE_STATES:
+
+        # FIX: Reject non-string states before checking set membership.
+        if not isinstance(state, str) or state not in VALID_NODE_STATES:
             return None
 
         return NodeInfo(
@@ -244,6 +377,7 @@ class UDPProtocol(asyncio.DatagramProtocol):
             ram=float(ram),
             last_seen=float(last_seen),
             state=state,
+            tcp_port=tcp_port,
         )
 
     def _merge_peer_list(self, payload):
@@ -271,6 +405,12 @@ class UDPProtocol(asyncio.DatagramProtocol):
                 node.node_id,
                 address=(node.host, node.port),
             )
+
+            if node.tcp_port is not None:
+                self.peer_manager.record_tcp_address(
+                    node.node_id,
+                    (node.host, node.tcp_port),
+                )
 
     def _cache_task_result(self, sender_id, task_id, payload):
         """Cache a task result with a bounded number of entries."""
@@ -387,6 +527,21 @@ class UDPProtocol(asyncio.DatagramProtocol):
         if task is not None and not task.done():
             task.cancel()
 
+        heartbeat_task = self._heartbeat_task
+        self._heartbeat_task = None
+        if heartbeat_task is not None and not heartbeat_task.done():
+            heartbeat_task.cancel()
+
+        send_queue_task = self._send_queue_task
+        self._send_queue_task = None
+        if send_queue_task is not None and not send_queue_task.done():
+            send_queue_task.cancel()
+
+        for tcp_task in list(self._tcp_send_tasks):
+            if not tcp_task.done():
+                tcp_task.cancel()
+        self._tcp_send_tasks.clear()
+
         self.transport = None
         print(f"UDP node {self.node_id} stopped")
 
@@ -398,17 +553,70 @@ class UDPProtocol(asyncio.DatagramProtocol):
                 self.node_registry.pop(peer_id, None)
         return removed
 
+    def _tcp_address_for_udp_peer(self, udp_address):
+        """Find the advertised TCP endpoint for a known UDP peer."""
+        for peer_id, known_udp_address in self.peer_manager.addresses.items():
+            if tuple(known_udp_address[:2]) == tuple(udp_address[:2]):
+                tcp_address = self.peer_manager.get_peer_tcp_address(peer_id)
+                if tcp_address is not None:
+                    return tuple(tcp_address)
+                return None
+        return None
+
+    async def _send_large_message_tcp(self, message, tcp_address, udp_address):
+        """Send a large structured message over TCP and record its response."""
+        try:
+            response = await send_tcp_message(
+                tcp_address[0],
+                tcp_address[1],
+                message,
+            )
+            self.received_envelopes.append((response, udp_address))
+        except (OSError, ConnectionError, ValueError, TimeoutError) as exc:
+            self.tcp_send_errors.append((message, tcp_address, exc))
+            print(
+                f"TCP send failed from node {self.node_id} to " f"{tcp_address}: {exc}"
+            )
+
+    def _track_tcp_send_task(self, task):
+        """Keep TCP send tasks referenced until they finish."""
+        self._tcp_send_tasks.add(task)
+        task.add_done_callback(self._tcp_send_tasks.discard)
+
     def send_message(self, message, address):
-        """Send a plain-text or structured UDP message."""
-        if self.transport is None:
+        """Send small messages through UDP and route large messages through TCP."""
+        if self.transport is None or self.transport.is_closing():
             raise RuntimeError("UDP node is not started")
 
         if isinstance(message, Message):
             data = message.encode()
-        else:
+        elif isinstance(message, str):
             data = message.encode("utf-8")
+        else:
+            raise TypeError("message must be a Message or string")
 
-        self.transport.sendto(data, address)
+        if len(data) > MAX_UDP_MESSAGE_SIZE:
+            if not isinstance(message, Message):
+                raise ValueError(
+                    "Large UDP payloads require a structured Message for TCP fallback"
+                )
+
+            tcp_address = self._tcp_address_for_udp_peer(address)
+            if tcp_address is None:
+                raise RuntimeError(
+                    f"No TCP endpoint is registered for UDP peer {address}"
+                )
+
+            task = asyncio.create_task(
+                self._send_large_message_tcp(message, tcp_address, address)
+            )
+            self._track_tcp_send_task(task)
+            return
+
+        try:
+            self.send_queue.put_nowait((data, address))
+        except asyncio.QueueFull as exc:
+            raise BufferError("UDP send queue is full") from exc
 
 
 async def start_udp_node(
@@ -417,6 +625,8 @@ async def start_udp_node(
     node_id="node",
     peer_manager=None,
     execution_engine=None,
+    send_queue_size=DEFAULT_SEND_QUEUE_SIZE,
+    send_rate_limit=DEFAULT_SEND_RATE_LIMIT,
 ):
     """Start a UDP node and return its transport and protocol."""
     loop = asyncio.get_running_loop()
@@ -426,6 +636,8 @@ async def start_udp_node(
             node_id=node_id,
             peer_manager=peer_manager,
             execution_engine=execution_engine,
+            send_queue_size=send_queue_size,
+            send_rate_limit=send_rate_limit,
         ),
         local_addr=(host, port),
     )

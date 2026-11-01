@@ -110,6 +110,24 @@ class Submission(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(seen[0][1], seen[1][1])
         self.assertEqual([s[0] for s in seen], ["a", "b"])
 
+    async def test_retries_are_bounded_when_all_workers_fail(self):
+        peers = [
+            await self.worker("a", 10),
+            await self.worker("b", 20),
+        ]
+        attempted_nodes = []
+
+        async def failed_transport(peer, task):
+            attempted_nodes.append(peer.node_id)
+            raise ConnectionError("worker unavailable")
+
+        client = TaskClient(lambda: peers, failed_transport)
+        result = await client.submit_task("square", 5, max_retries=1)
+
+        self.assertEqual(result.status, TaskStatus.FAILED)
+        self.assertEqual(result.attempts, 2)
+        self.assertEqual(attempted_nodes, ["a", "b"])
+
     async def test_retry_limit_and_no_workers(self):
         peers = [await self.worker("a", 10), await self.worker("b", 20)]
 
