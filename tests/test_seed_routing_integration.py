@@ -1,4 +1,3 @@
-
 """End-to-end tests for seed-based task routing."""
 
 import asyncio
@@ -14,7 +13,6 @@ from net.bootstrap import SeedAddress, request_peer_list
 from net.messages import TASK_REQUEST, TASK_RESULT, Message
 from net.udp_node import start_udp_node
 from security.message_signing import sign_message
-
 
 TEST_SECRET = b"meshweaver-test-secret-32-bytes!!"
 
@@ -97,9 +95,7 @@ class TestSeedRoutingIntegration(unittest.IsolatedAsyncioTestCase):
             result = None
 
             while loop.time() < deadline:
-                for message, _address in reversed(
-                    client_protocol.received_envelopes
-                ):
+                for message, _address in reversed(client_protocol.received_envelopes):
                     if (
                         message.type == TASK_RESULT
                         and message.seq == 1
