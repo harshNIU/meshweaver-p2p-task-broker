@@ -8,7 +8,11 @@ import argparse
 import asyncio
 import json
 import multiprocessing
+import sys
 import time
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from dht import DHTNode, make_node_id
 

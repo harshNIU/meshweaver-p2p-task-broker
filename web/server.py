@@ -71,6 +71,10 @@ def create_dashboard_server(
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "no-store")
             self.send_header("X-Content-Type-Options", "nosniff")
+
+            if self.close_connection:
+                self.send_header("Connection", "close")
+
             self.end_headers()
             self.wfile.write(body)
 
@@ -145,7 +149,11 @@ def create_dashboard_server(
                 return
 
             if length > MAX_REQUEST_BYTES:
-                self.send_json_error(413, "Request body must not exceed 4096 bytes.")
+                self.close_connection = True
+                self.send_json_error(
+                    413,
+                    "Request body must not exceed 4096 bytes.",
+                )
                 return
 
             content_type = self.headers.get("Content-Type", "")

@@ -49,3 +49,46 @@ Run the web-specific tests:
 ```powershell id="4o0vck"
 python -m pytest tests/test_web.py -q
 ```
+
+
+## 7. M2 integration review — 27 October 2026
+
+Mentor approval for the optional web dashboard was confirmed by Harsh on
+27 October. The target architecture keeps the web view as a presentation layer:
+
+```text
+Runtime peer/load state + execution lifecycle + health events
+                         |
+                  shared snapshot()
+                  /               \
+          Rich dashboard       HTTP state / SSE -> browser
+
+Browser allowlisted name + JSON arguments
+  -> HTTP token validation
+  -> shared signed task submission adapter
+  -> routing: fresh ALIVE worker, lowest CPU / RAM / ID
+  -> authenticated task transport -> execution -> tracked result
+```
+
+The shared snapshot entry point is proposed at `cli/snapshot.py`; M5 owns its
+integration. Reuse the existing live builder rather than introducing a second
+state store. HTTP handler threads must consume a safe copy of runtime state.
+The dashboard reports state; it does not become a central broker or override
+DHT discovery, gossip health or router policy.
+
+**Current behavior differs from this target.** The CLI imports
+`web.snapshot.build_snapshot` directly. Its web callback creates a Task and
+calls the local `ExecutionEngine.submit_task`; it does not call TaskClient or
+a signed distributed submission adapter. The HTTP token does not authenticate
+inter-node traffic. Rich/shared-snapshot integration, wire-field normalization,
+independent web binding and bounded HTTP reads remain follow-up work.
+
+`tasks/router.py` and `tasks/submit.py` already provide M2's load-selection and
+bounded-retry APIs. They read a supplied NodeInfo snapshot and accept an
+injected transport. The web adapter must use the agreed task channel, not copy
+router logic or treat the existing local callback as proof of remote execution.
+The original callable-serialization requirement still needs explicit integration
+with this submission API; the TaskClient API currently accepts registered names.
+
+See [the contract](web_contract.md) for field definitions and
+[the M2 review](m2_web_review.md) for acceptance criteria and owners.

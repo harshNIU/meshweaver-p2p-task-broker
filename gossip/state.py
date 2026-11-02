@@ -15,3 +15,4 @@ class NodeInfo:
     ram: float = 0.0
     last_seen: float = 0.0
     state: NodeState = "ALIVE"
+    tcp_port: int | None = None

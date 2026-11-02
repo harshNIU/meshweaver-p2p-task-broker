@@ -250,43 +250,39 @@ For the DHT and routing review, consult `docs/member2_review.md` and `docs/netwo
 ## Development Workflow
 
 Before committing changes, check the working tree:
-
-```powershell
 git status
-```
+
 
 Run the test suite:
-
-```powershell
 python -m unittest discover -s tests -v
-```
 
 Review whitespace errors:
 
-```powershell
+
 git diff --check
-```
+
 
 Stage only the intended files:
 
-```powershell
+
 git add README.md start_four_nodes.ps1
-```
+
 
 Commit:
-
-```powershell
 git commit -m "docs: document local task execution workflow"
-```
+
 
 Push your branch:
-
-```powershell
 git push origin Shrinidhi-async-network
-```
+
 
 If the branch has already been merged into `main`, merge or cherry-pick subsequent changes through your team's normal workflow. A new commit on the feature branch does not automatically update `main`.
+
 
 ## License
 
 Add the license selected by the project maintainers. Do not claim a license until the team has confirmed and included it.
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for project setup, testing, code quality checks, branch workflow, and pull request guidelines.

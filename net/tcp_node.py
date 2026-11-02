@@ -43,8 +43,10 @@ async def read_message(reader: asyncio.StreamReader) -> Message:
 async def send_message(writer: asyncio.StreamWriter, message: Message) -> None:
     """Send one message over a TCP stream."""
     encoded = message.encode()
+
     if len(encoded) + 1 > MAX_MESSAGE_SIZE:
         raise ValueError(f"TCP message exceeds the {MAX_MESSAGE_SIZE}-byte limit.")
+
     writer.write(encoded + b"\n")
     await writer.drain()
 
@@ -80,6 +82,7 @@ def _failure_response(
         "status": TaskStatus.FAILED.value,
         "error": error,
     }
+
     if task_id is not None:
         payload["task_id"] = task_id
 
@@ -104,12 +107,14 @@ async def _handle_task_request(
 
     if execution_engine is None:
         return _failure_response(
-            message, "Remote task execution is not configured on this server."
+            message,
+            "Remote task execution is not configured on this server.",
         )
 
     if not isinstance(task_data, dict):
         return _failure_response(
-            message, "TASK_REQUEST payload must contain a task object."
+            message,
+            "TASK_REQUEST payload must contain a task object.",
         )
 
     try:
@@ -121,7 +126,9 @@ async def _handle_task_request(
         result = await asyncio.to_thread(execution_engine.execute, task)
     except (ValueError, RuntimeError) as exc:
         return _failure_response(
-            message, f"Task execution rejected: {exc}", task_id=task.task_id
+            message,
+            f"Task execution rejected: {exc}",
+            task_id=task.task_id,
         )
 
     return Message(
@@ -152,13 +159,18 @@ def _handle_task_assignment(message: Message) -> Message:
             and bool(task_id.strip())
             and actual_task_id == task_id
         )
+
         error = (
             None
             if accepted
             else "Assignment task_id must match the task object's task_id."
         )
 
-    response_payload = {"accepted": accepted, "task_id": task_id}
+    response_payload = {
+        "accepted": accepted,
+        "task_id": task_id,
+    }
+
     if error:
         response_payload["error"] = error
 
@@ -193,7 +205,10 @@ async def handle_client(
             received_messages.append(message)
 
             if message.type == TASK_REQUEST:
-                response = await _handle_task_request(message, execution_engine)
+                response = await _handle_task_request(
+                    message,
+                    execution_engine,
+                )
             elif message.type == TASK_ASSIGN:
                 response = _handle_task_assignment(message)
             else:
@@ -209,17 +224,23 @@ async def handle_client(
                 )
 
             if response.type in AUTHENTICATED_TYPES:
-                sign_message(
-                    response, secret if secret is not None else load_shared_secret()
-                )
+                response_key = secret if secret is not None else load_shared_secret()
+                sign_message(response, response_key)
 
             await send_message(writer, response)
 
-    except (ValueError, ConnectionError, MessageAuthenticationError, OSError):
+    except (
+        ValueError,
+        ConnectionError,
+        MessageAuthenticationError,
+        OSError,
+    ):
         # Invalid or unauthenticated task traffic is rejected before execution.
         pass
+
     finally:
         writer.close()
+
         try:
             await writer.wait_closed()
         except ConnectionError:
@@ -254,6 +275,7 @@ async def start_tcp_server(
         port,
         limit=MAX_MESSAGE_SIZE,
     )
+
     return server, received_messages
 
 
@@ -274,6 +296,7 @@ async def send_tcp_message(
     message.correlation_id = correlation_id
 
     key = secret
+
     if message.type in AUTHENTICATED_TYPES:
         key = key if key is not None else load_shared_secret()
         sign_message(message, key)
@@ -284,11 +307,24 @@ async def send_tcp_message(
     try:
         try:
             reader, writer = await asyncio.wait_for(
-                asyncio.open_connection(host, port, limit=MAX_MESSAGE_SIZE),
+                asyncio.open_connection(
+                    host,
+                    port,
+                    limit=MAX_MESSAGE_SIZE,
+                ),
                 timeout=timeout,
             )
-            await asyncio.wait_for(send_message(writer, message), timeout=timeout)
-            response = await asyncio.wait_for(read_message(reader), timeout=timeout)
+
+            await asyncio.wait_for(
+                send_message(writer, message),
+                timeout=timeout,
+            )
+
+            response = await asyncio.wait_for(
+                read_message(reader),
+                timeout=timeout,
+            )
+
         except TimeoutError as exc:
             raise RequestTimeoutError(
                 f"TCP request timed out after {timeout} seconds"
@@ -302,17 +338,23 @@ async def send_tcp_message(
                 raise MessageAuthenticationError(
                     "No shared secret is available to verify the TCP response."
                 )
+
             verify_message(response, key)
 
         if not manager.deliver_response(correlation_id, response):
             raise ValueError("TCP response could not be matched to its request")
 
-        return await manager.wait_for_response(correlation_id, timeout)
+        return await manager.wait_for_response(
+            correlation_id,
+            timeout,
+        )
 
     finally:
         manager.cancel_request(correlation_id)
+
         if writer is not None:
             writer.close()
+
             try:
                 await writer.wait_closed()
             except ConnectionError:
