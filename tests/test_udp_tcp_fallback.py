@@ -1,4 +1,3 @@
-
 import asyncio
 import unittest
 
@@ -6,7 +5,6 @@ from execution.engine import ExecutionEngine
 from net.messages import TASK_REQUEST, TASK_RESULT, Message
 from net.tcp_node import start_tcp_server
 from net.udp_node import MAX_UDP_MESSAGE_SIZE, start_udp_node
-
 
 # Must contain at least 32 bytes.
 TEST_SECRET = b"meshweaver-test-shared-secret-32-bytes-minimum"

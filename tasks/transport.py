@@ -1,4 +1,3 @@
-
 """Authenticated TCP transport for MeshWeaver task execution.
 
 Supports three connection configurations:
@@ -50,9 +49,7 @@ async def send_task(
         raise ValueError("Choose either HMAC or Ed25519 authentication, not both")
 
     if secure and (private_key is None or trust_store is None):
-        raise ValueError(
-            "Secure client requires private_key and trust_store"
-        )
+        raise ValueError("Secure client requires private_key and trust_store")
 
     nonce = uuid4().hex if secure else None
 
@@ -92,9 +89,7 @@ async def send_task(
 
         if secret is not None:
             if not verify_hmac_message(response, secret):
-                raise MessageAuthenticationError(
-                    "Task response authentication failed"
-                )
+                raise MessageAuthenticationError("Task response authentication failed")
 
         elif secure:
             if not trust_store.verify_message(response):
@@ -145,18 +140,14 @@ class TaskServer:
             raise ValueError("Choose either HMAC or Ed25519 authentication, not both")
 
         if secure and (trust_store is None or private_key is None):
-            raise ValueError(
-                "Secure server requires trust_store and private_key"
-            )
+            raise ValueError("Secure server requires trust_store and private_key")
 
         self.engine = engine
         self.secret = secret
         self.secure = secure
         self.trust_store = trust_store
         self.private_key = private_key
-        self.replay_guard = (
-            replay_guard if replay_guard is not None else ReplayGuard()
-        )
+        self.replay_guard = replay_guard if replay_guard is not None else ReplayGuard()
         self.sender_id = sender_id
 
         self._slots = asyncio.Semaphore(workers)
@@ -237,9 +228,7 @@ class TaskServer:
 
             task_data = request.payload.get("task")
             if not isinstance(task_data, dict):
-                raise TypeError(
-                    "Task request must contain a task object"
-                )
+                raise TypeError("Task request must contain a task object")
 
             task = deserialize_task(json.dumps(task_data))
 
@@ -259,8 +248,7 @@ class TaskServer:
                     self._running[task.task_id] = pending
 
                     pending.add_done_callback(
-                        lambda done, key=task.task_id:
-                            self._running.pop(key, None)
+                        lambda done, key=task.task_id: self._running.pop(key, None)
                     )
 
                 result = await asyncio.shield(pending)

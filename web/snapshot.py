@@ -32,9 +32,7 @@ def _resource_usage() -> tuple[float, float]:
 
 def _normalise_task(task: dict[str, Any]) -> dict[str, Any]:
     """Return tasks using the dashboard's exact five-field contract."""
-    raw_state = str(
-        task.get("state", task.get("status", "PENDING"))
-    ).upper()
+    raw_state = str(task.get("state", task.get("status", "PENDING"))).upper()
 
     state_mapping = {
         "COMPLETED": "DONE",
@@ -110,20 +108,14 @@ def build_snapshot(
             "host": str(getattr(info, "host", host)),
             "port": int(getattr(info, "port", port)),
             "cpu": (
-                cpu
-                if info_id == node_id
-                else float(getattr(info, "cpu", 0.0) or 0.0)
+                cpu if info_id == node_id else float(getattr(info, "cpu", 0.0) or 0.0)
             ),
             "ram": (
-                ram
-                if info_id == node_id
-                else float(getattr(info, "ram", 0.0) or 0.0)
+                ram if info_id == node_id else float(getattr(info, "ram", 0.0) or 0.0)
             ),
             "state": state,
             "last_seen": (
-                _iso_timestamp(last_seen_value)
-                if last_seen_value > 0
-                else None
+                _iso_timestamp(last_seen_value) if last_seen_value > 0 else None
             ),
         }
 

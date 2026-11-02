@@ -1,4 +1,3 @@
-
 """MeshWeaver CLI for starting nodes and submitting tasks."""
 
 import asyncio
@@ -191,9 +190,7 @@ def start(
             )
 
             if not tcp_server.sockets:
-                raise RuntimeError(
-                    "TCP server started without a listening socket."
-                )
+                raise RuntimeError("TCP server started without a listening socket.")
 
             tcp_port = tcp_server.sockets[0].getsockname()[1]
             protocol.set_tcp_endpoint(host, tcp_port)
@@ -211,9 +208,7 @@ def start(
                 if joined:
                     typer.echo(f"Registered with seed {seed}")
                 else:
-                    typer.echo(
-                        f"Could not discover peers through seed {seed}"
-                    )
+                    typer.echo(f"Could not discover peers through seed {seed}")
 
             typer.echo(f"MeshWeaver node running at {host}:{port}")
             typer.echo(f"TCP server listening at {host}:{tcp_port}")
@@ -236,9 +231,7 @@ def start(
                 try:
                     shared_secret = load_shared_secret()
                 except MessageAuthenticationError as exc:
-                    typer.echo(
-                        f"Dashboard submissions disabled: {exc}"
-                    )
+                    typer.echo(f"Dashboard submissions disabled: {exc}")
                     task_submitter = None
                 else:
                     task_submitter = create_dashboard_submitter(
@@ -265,18 +258,12 @@ def start(
 
                 typer.echo(f"Dashboard: http://{host}:{web_port}/")
                 typer.echo(f"Submission token: {dashboard.submit_token}")
-                typer.echo(
-                    "Use the token in the X-Token header for POST /api/submit."
-                )
+                typer.echo("Use the token in the X-Token header for POST /api/submit.")
 
                 if task_submitter is None:
-                    typer.echo(
-                        "Dashboard is running in read-only mode."
-                    )
+                    typer.echo("Dashboard is running in read-only mode.")
                 else:
-                    typer.echo(
-                        "Authenticated remote dashboard submissions enabled."
-                    )
+                    typer.echo("Authenticated remote dashboard submissions enabled.")
 
             await asyncio.Event().wait()
 
@@ -309,9 +296,7 @@ def start(
 
 @app.command()
 def submit(
-    task_name: str = typer.Argument(
-        ..., help="Task name, such as add or multiply."
-    ),
+    task_name: str = typer.Argument(..., help="Task name, such as add or multiply."),
     args: str = typer.Option(
         "[]", "--args", help="JSON array of positional arguments."
     ),
@@ -321,9 +306,7 @@ def submit(
     host: str = typer.Option("127.0.0.1", help="Target node host."),
     port: int = typer.Option(8000, help="Target node UDP port."),
     timeout: float = typer.Option(5.0, help="Result timeout in seconds."),
-    seed: str = typer.Option(
-        None, help="Optional seed address in host:port format."
-    ),
+    seed: str = typer.Option(None, help="Optional seed address in host:port format."),
 ):
     """Submit a task to a remote MeshWeaver node."""
     _validate_port(port, "--port")
@@ -387,27 +370,19 @@ def submit(
 
                 joined = await request_peer_list(
                     protocol=protocol,
-                    node_id=getattr(
-                        protocol, "node_id", "meshweaver-client"
-                    ),
+                    node_id=getattr(protocol, "node_id", "meshweaver-client"),
                     seed=seed_address,
                     timeout=2.0,
                 )
 
                 if not joined:
-                    raise RuntimeError(
-                        "Could not discover peers through the seed."
-                    )
+                    raise RuntimeError("Could not discover peers through the seed.")
 
-                destination = select_seed_destination(
-                    protocol, seed_address
-                )
+                destination = select_seed_destination(protocol, seed_address)
 
             request = Message(
                 type=TASK_REQUEST,
-                sender_id=getattr(
-                    protocol, "node_id", "meshweaver-client"
-                ),
+                sender_id=getattr(protocol, "node_id", "meshweaver-client"),
                 seq=1,
                 payload={"task": task_payload},
             )

@@ -1,4 +1,3 @@
-
 """Authenticated remote task submission for the MeshWeaver dashboard."""
 
 import asyncio
@@ -8,7 +7,6 @@ from dataclasses import replace
 from execution.models import Task, TaskResult, TaskStatus
 from tasks.submit import TaskClient
 from tasks.transport import send_task
-
 
 ALLOWED_TASKS = frozenset({"add", "multiply"})
 
@@ -147,9 +145,7 @@ def create_dashboard_submitter(
             )
             task_registry.mark_result(task, failed_result)
 
-            raise RuntimeError(
-                "Remote task submission timed out."
-            ) from exc
+            raise RuntimeError("Remote task submission timed out.") from exc
 
         except Exception:
             future.cancel()
