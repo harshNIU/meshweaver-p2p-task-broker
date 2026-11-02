@@ -31,6 +31,25 @@ class TaskRegistry:
             }
             self._event("INFO", f"Task {task.task_id} registered ({task.task_name})")
 
+    def mark_assigned(self, task: Task, node_id: str) -> None:
+        """Record the remote worker without marking it locally RUNNING."""
+        with self._lock:
+            record = self._records.setdefault(
+                task.task_id,
+                {
+                    "task_id": task.task_id,
+                    "name": task.task_name,
+                    "assigned_to": None,
+                    "attempt": 0,
+                    "created_at": time.time(),
+                },
+            )
+            record["assigned_to"] = node_id
+            self._event(
+                "INFO",
+                f"Task {task.task_id} assigned to {node_id}",
+            )
+
     def mark_running(self, task: Task, attempt: int = 1) -> None:
         with self._lock:
             record = self._records.setdefault(
@@ -43,7 +62,10 @@ class TaskRegistry:
                     "created_at": time.time(),
                 },
             )
-            record.update(status=TaskStatus.RUNNING.value.upper(), attempt=attempt)
+            record.update(
+                status=TaskStatus.RUNNING.value.upper(),
+                attempt=attempt,
+            )
             self._event("INFO", f"Task {task.task_id} started ({task.task_name})")
 
     def mark_result(self, task: Task, result: TaskResult) -> None:
