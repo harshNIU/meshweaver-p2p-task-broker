@@ -220,7 +220,6 @@ def start(
                 )
                 from web.server import create_dashboard_server
                 from web.snapshot import build_snapshot
-
                 from web.submission import create_dashboard_submitter
 
                 # Dashboard HTTP requests execute in separate threads.

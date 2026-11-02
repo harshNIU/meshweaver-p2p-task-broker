@@ -130,6 +130,7 @@ def create_dashboard_server(
 
             supplied_token = self.headers.get("X-Token", "")
             if not hmac.compare_digest(supplied_token, token):
+                self.close_connection = True
                 self.send_json_error(403, "Invalid or missing submission token.")
                 return
 

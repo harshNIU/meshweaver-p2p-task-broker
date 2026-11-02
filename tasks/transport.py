@@ -21,7 +21,11 @@ from net.messages import TASK_REQUEST, TASK_RESULT, Message
 from net.tcp_node import MAX_MESSAGE_SIZE, read_message, send_message
 from security.message_signing import (
     MessageAuthenticationError,
+)
+from security.message_signing import (
     sign_message as sign_hmac_message,
+)
+from security.message_signing import (
     verify_message as verify_hmac_message,
 )
 from security.replay import ReplayGuard
