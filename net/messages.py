@@ -13,6 +13,7 @@ TASK_RESULT = "TASK_RESULT"
 TASK_ASSIGN = "TASK_ASSIGN"
 TASK_ACK = "TASK_ACK"
 
+
 @dataclass(init=False)
 class Message:
     """A standard envelope for messages exchanged between nodes."""

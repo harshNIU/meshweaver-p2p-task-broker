@@ -88,3 +88,25 @@ def test_merge_updates_tcp_port_from_newer_peer_record():
     result = merge_node_info(current, [new_node])
 
     assert result["node-2"].tcp_port == 9002
+
+
+def test_merge_accepts_tcp_port_from_older_record_without_replacing_newer_info():
+    newer_node = NodeInfo(
+        node_id="node-2",
+        host="127.0.0.2",
+        port=8002,
+        last_seen=20.0,
+        tcp_port=None,
+    )
+    older_node = NodeInfo(
+        node_id="node-2",
+        host="127.0.0.2",
+        port=8002,
+        last_seen=10.0,
+        tcp_port=9002,
+    )
+
+    result = merge_node_info({"node-2": newer_node}, [older_node])
+
+    assert result["node-2"].last_seen == 20.0
+    assert result["node-2"].tcp_port == 9002

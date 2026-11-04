@@ -149,3 +149,73 @@ class Submission(unittest.IsolatedAsyncioTestCase):
 
         result = await TaskClient(lambda: [peer], wrong).submit_task("square")
         self.assertEqual(result.status, TaskStatus.FAILED)
+
+
+class SyntheticLoadTables(unittest.TestCase):
+    """Verify deterministic routing with synthetic worker load tables."""
+
+    def make_node(self, node_id, cpu, ram, state="ALIVE"):
+        return NodeInfo(
+            node_id,
+            "127.0.0.1",
+            9000,
+            cpu=cpu,
+            ram=ram,
+            last_seen=100,
+            state=state,
+        )
+
+    def test_synthetic_load_tables(self):
+        scenarios = [
+            (
+                "lowest CPU wins",
+                [
+                    self.make_node("a", 40, 5),
+                    self.make_node("b", 15, 80),
+                    self.make_node("c", 25, 10),
+                ],
+                "b",
+            ),
+            (
+                "lowest RAM breaks CPU tie",
+                [
+                    self.make_node("a", 10, 40),
+                    self.make_node("b", 10, 20),
+                    self.make_node("c", 10, 30),
+                ],
+                "b",
+            ),
+            (
+                "node ID breaks CPU and RAM tie",
+                [
+                    self.make_node("z", 10, 20),
+                    self.make_node("c", 10, 20),
+                    self.make_node("a", 10, 20),
+                ],
+                "a",
+            ),
+            (
+                "unhealthy low-load node is ignored",
+                [
+                    self.make_node("a", 1, 1, state="DEAD"),
+                    self.make_node("b", 40, 40),
+                ],
+                "b",
+            ),
+        ]
+
+        for description, nodes, expected_id in scenarios:
+            with self.subTest(scenario=description):
+                selected = select_node(nodes, now=100)
+                self.assertEqual(selected.node_id, expected_id)
+
+    def test_dictionary_snapshot_and_exclusion(self):
+        preferred = self.make_node("a", 5, 10)
+        backup = self.make_node("b", 20, 20)
+        snapshot = {"a": preferred, "b": backup}
+
+        selected = select_node(snapshot, now=100)
+        self.assertEqual(selected.node_id, "a")
+
+        selected = select_node(snapshot, exclude={"a"}, now=100)
+        self.assertEqual(selected.node_id, "b")

@@ -94,7 +94,7 @@ The implementation supports:
 ## Conclusion
 
 Week 1 established the foundation for MeshWeaver's peer-to-peer networking system. UDP communication, message handling, peer management, discovery, and remote task execution were implemented and tested. Further networking improvements continue in the following development stages.
-=======
+
 ﻿# Week 1 Implementation Notes — Member 4
 
 ## Work Completed

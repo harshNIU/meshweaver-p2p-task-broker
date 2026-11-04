@@ -12,6 +12,9 @@ from execution.serializer import serialize_task
 from net.bootstrap import SeedAddress, request_peer_list
 from net.messages import TASK_REQUEST, TASK_RESULT, Message
 from net.udp_node import start_udp_node
+from security.message_signing import sign_message
+
+TEST_SECRET = b"meshweaver-test-secret-32-bytes!!"
 
 
 class TestSeedRoutingIntegration(unittest.IsolatedAsyncioTestCase):
@@ -35,6 +38,7 @@ class TestSeedRoutingIntegration(unittest.IsolatedAsyncioTestCase):
             worker_transport, worker_protocol = await start_udp_node(
                 node_id="worker-node",
                 execution_engine=engine,
+                secret=TEST_SECRET,
             )
             worker_host, worker_port = worker_transport.get_extra_info("sockname")
 
@@ -50,6 +54,7 @@ class TestSeedRoutingIntegration(unittest.IsolatedAsyncioTestCase):
             # Start a client and discover peers through the same seed.
             client_transport, client_protocol = await start_udp_node(
                 node_id="client-node",
+                secret=TEST_SECRET,
             )
 
             client_joined = await request_peer_list(
@@ -78,6 +83,10 @@ class TestSeedRoutingIntegration(unittest.IsolatedAsyncioTestCase):
                 seq=1,
                 payload={"task": task_data},
             )
+
+            # Authenticate the task request before sending it.
+            sign_message(request, TEST_SECRET)
+
             client_protocol.send_message(request, destination)
 
             # Wait for the matching task result.

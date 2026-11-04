@@ -41,12 +41,14 @@ def _validate_port(port, option):
 def _peer_address(peer, key=None):
     """Extract a peer's network address from a NodeInfo-like object."""
     address = getattr(peer, "address", None)
+
     if address is None:
         address = getattr(peer, "addr", None)
 
     if address is None:
         host = getattr(peer, "host", None)
         peer_port = getattr(peer, "port", None)
+
         if host is not None and peer_port is not None:
             address = (host, peer_port)
 
@@ -73,10 +75,12 @@ def select_seed_destination(protocol, seed):
 
     for key, peer in peers:
         address = _peer_address(peer, key)
+
         if address is None:
             continue
 
         peer_id = getattr(peer, "node_id", None)
+
         if peer_id is None:
             peer_id = getattr(peer, "id", None)
 
@@ -121,6 +125,7 @@ def _wait_for_task_result(protocol, seq, task_id, timeout):
                 continue
 
             payload = getattr(message, "payload", {})
+
             if payload.get("task_id") != task_id:
                 continue
 
@@ -190,10 +195,12 @@ def start(
         dashboard = None
 
         try:
+            local_node_id = node_id or f"node-{port}"
+
             transport, protocol = await start_udp_node(
                 host=host,
                 port=port,
-                node_id=node_id or f"node-{port}",
+                node_id=local_node_id,
                 execution_engine=engine,
             )
 
@@ -205,6 +212,7 @@ def start(
                 execution_engine=engine,
                 ssl_context=ssl_context,
             )
+
             if not tcp_server.sockets:
                 raise RuntimeError("TCP server started without a listening socket.")
 
@@ -213,12 +221,14 @@ def start(
 
             if seed:
                 seed_address = parse_seed_address(seed)
+
                 joined = await request_peer_list(
                     protocol=protocol,
-                    node_id=node_id or f"node-{port}",
+                    node_id=local_node_id,
                     seed=seed_address,
                     timeout=2.0,
                 )
+
                 if joined:
                     typer.echo(f"Registered with seed {seed}")
                 else:
@@ -228,42 +238,32 @@ def start(
             typer.echo(f"TCP server listening at {host}:{tcp_port}")
 
             if web:
+                from security.message_signing import (
+                    MessageAuthenticationError,
+                    load_shared_secret,
+                )
                 from web.server import create_dashboard_server
                 from web.snapshot import build_snapshot
+                from web.submission import create_dashboard_submitter
 
-                def submit_demo(payload):
-                    """Validate and queue an allowlisted dashboard demo task."""
-                    task_name = payload["name"]
-                    args = payload.get("args", [])
-                    kwargs = payload.get("kwargs", {})
+                # Dashboard HTTP requests execute in separate threads.
+                # Capture this node's running event loop so the submitter
+                # can safely schedule authenticated TCP work on it.
+                loop = asyncio.get_running_loop()
 
-                    if (
-                        not isinstance(task_name, str)
-                        or task_name not in WEB_ALLOWED_TASKS
-                    ):
-                        raise ValueError("Only add and multiply are allowed.")
-
-                    if not isinstance(args, list):
-                        raise TypeError("'args' must be a JSON array.")
-
-                    if not isinstance(kwargs, dict):
-                        raise TypeError("'kwargs' must be a JSON object.")
-
-                    if not all(isinstance(key, str) for key in kwargs):
-                        raise TypeError("'kwargs' keys must be strings.")
-
-                    task = Task(
-                        task_name,
-                        args=tuple(args),
-                        kwargs=kwargs,
+                try:
+                    shared_secret = load_shared_secret()
+                except MessageAuthenticationError as exc:
+                    typer.echo(f"Dashboard submissions disabled: {exc}")
+                    task_submitter = None
+                else:
+                    task_submitter = create_dashboard_submitter(
+                        loop=loop,
+                        protocol=protocol,
+                        task_registry=engine.task_registry,
+                        local_node_id=local_node_id,
+                        secret=shared_secret,
                     )
-
-                    engine.submit_task(task)
-
-                    return {
-                        "task_id": task.task_id,
-                        "state": "PENDING",
-                    }
 
                 dashboard = create_dashboard_server(
                     host=host,
@@ -271,17 +271,22 @@ def start(
                     snapshot_provider=lambda: build_snapshot(
                         protocol=protocol,
                         transport=transport,
-                        node_id=node_id or f"node-{port}",
+                        node_id=local_node_id,
                         host=host,
                         port=port,
                         task_registry=engine.task_registry,
                     ),
-                    task_submitter=submit_demo,
+                    task_submitter=task_submitter,
                 )
 
                 typer.echo(f"Dashboard: http://{host}:{web_port}/")
                 typer.echo(f"Submission token: {dashboard.submit_token}")
                 typer.echo("Use the token in the X-Token header for POST /api/submit.")
+
+                if task_submitter is None:
+                    typer.echo("Dashboard is running in read-only mode.")
+                else:
+                    typer.echo("Authenticated remote dashboard submissions enabled.")
 
             await asyncio.Event().wait()
 
@@ -385,12 +390,14 @@ def submit(
 
             if seed:
                 seed_address = parse_seed_address(seed)
+
                 joined = await request_peer_list(
                     protocol=protocol,
                     node_id=getattr(protocol, "node_id", "meshweaver-client"),
                     seed=seed_address,
                     timeout=2.0,
                 )
+
                 if not joined:
                     raise RuntimeError("Could not discover peers through the seed.")
 
