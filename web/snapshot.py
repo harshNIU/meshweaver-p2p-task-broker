@@ -31,15 +31,23 @@ def _resource_usage() -> tuple[float, float]:
 
 
 def _normalise_task(task: dict[str, Any]) -> dict[str, Any]:
-    """Keep task data compatible with the dashboard's expected field names."""
-    item = dict(task)
+    """Return tasks using the dashboard's exact five-field contract."""
+    raw_state = str(task.get("state", task.get("status", "PENDING"))).upper()
 
-    item["state"] = str(item.get("state", item.get("status", "PENDING"))).upper()
+    state_mapping = {
+        "COMPLETED": "DONE",
+        "CANCELLED": "FAILED",
+    }
 
-    item["node"] = item.get("node", item.get("assigned_to"))
-    item["attempts"] = item.get("attempts", item.get("attempt", 0))
+    state = state_mapping.get(raw_state, raw_state)
 
-    return item
+    return {
+        "task_id": task.get("task_id", ""),
+        "name": task.get("name", ""),
+        "state": state,
+        "node": task.get("node") or task.get("assigned_to") or "-",
+        "attempts": task.get("attempts", task.get("attempt", 0)) or 0,
+    }
 
 
 def build_snapshot(
@@ -145,6 +153,7 @@ def build_snapshot(
 
     if task_registry is not None:
         snapshot_tasks = getattr(task_registry, "snapshot_tasks", None)
+
         if callable(snapshot_tasks):
             try:
                 tasks = [
@@ -156,6 +165,7 @@ def build_snapshot(
                 tasks = []
 
         snapshot_events = getattr(task_registry, "snapshot_events", None)
+
         if callable(snapshot_events):
             try:
                 for event in snapshot_events():
@@ -176,6 +186,7 @@ def build_snapshot(
 
     # Include actual messages received by the UDP protocol in the event log.
     received = getattr(protocol, "received_envelopes", []) or []
+
     for message, address in list(received)[-50:]:
         sender_id = str(getattr(message, "sender_id", "unknown"))
         message_type = str(getattr(message, "type", "MESSAGE"))

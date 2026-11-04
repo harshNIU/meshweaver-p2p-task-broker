@@ -6,21 +6,35 @@ from net.messages import TASK_REQUEST, TASK_RESULT, Message
 from net.tcp_node import start_tcp_server
 from net.udp_node import MAX_UDP_MESSAGE_SIZE, start_udp_node
 
+# Must contain at least 32 bytes.
+TEST_SECRET = b"meshweaver-test-shared-secret-32-bytes-minimum"
+
 
 class TestUDPTCPFallback(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.engine = ExecutionEngine()
         self.engine.register("add", lambda a, b: a + b)
 
-        self.tcp_server, _ = await start_tcp_server(
+        # Start an authenticated TCP server and retain its received messages.
+        self.tcp_server, self.tcp_received_messages = await start_tcp_server(
             host="127.0.0.1",
             port=0,
             execution_engine=self.engine,
+            secret=TEST_SECRET,
         )
+
         self.tcp_port = self.tcp_server.sockets[0].getsockname()[1]
 
-        self.transport_a, self.protocol_a = await start_udp_node(node_id="node-a")
-        self.transport_b, self.protocol_b = await start_udp_node(node_id="node-b")
+        # Start both UDP nodes with the same shared secret.
+        self.transport_a, self.protocol_a = await start_udp_node(
+            node_id="node-a",
+            secret=TEST_SECRET,
+        )
+
+        self.transport_b, self.protocol_b = await start_udp_node(
+            node_id="node-b",
+            secret=TEST_SECRET,
+        )
 
         self.udp_address_b = self.transport_b.get_extra_info("sockname")
 
@@ -29,6 +43,7 @@ class TestUDPTCPFallback(unittest.IsolatedAsyncioTestCase):
             "node-b",
             address=self.udp_address_b,
         )
+
         self.protocol_a.peer_manager.record_tcp_address(
             "node-b",
             ("127.0.0.1", self.tcp_port),
@@ -88,12 +103,31 @@ class TestUDPTCPFallback(unittest.IsolatedAsyncioTestCase):
 
         self.protocol_a.send_message(message, self.udp_address_b)
 
-        await self.wait_for_condition(
-            lambda: any(
-                received.type == TASK_RESULT and received.seq == 2
-                for received, _ in self.protocol_a.received_envelopes
+        try:
+            await self.wait_for_condition(
+                lambda: any(
+                    received.type == TASK_RESULT and received.seq == 2
+                    for received, _ in self.protocol_a.received_envelopes
+                )
             )
-        )
+        except AssertionError:
+            print("\n--- TCP FALLBACK DIAGNOSTICS ---")
+            print("TCP send errors:", self.protocol_a.tcp_send_errors)
+            print("TCP server received:", self.tcp_received_messages)
+            print(
+                "UDP A received envelopes:",
+                self.protocol_a.received_envelopes,
+            )
+            print(
+                "UDP B received messages:",
+                self.protocol_b.received_messages,
+            )
+            print(
+                "UDP B received envelopes:",
+                self.protocol_b.received_envelopes,
+            )
+            print("--- END DIAGNOSTICS ---\n")
+            raise
 
         result = next(
             received
@@ -111,7 +145,9 @@ class TestUDPTCPFallback(unittest.IsolatedAsyncioTestCase):
             type="TEST",
             sender_id="node-a",
             seq=3,
-            payload={"padding": "x" * (MAX_UDP_MESSAGE_SIZE + 100)},
+            payload={
+                "padding": "x" * (MAX_UDP_MESSAGE_SIZE + 100),
+            },
         )
 
         with self.assertRaises((RuntimeError, ValueError)):
