@@ -180,9 +180,7 @@ class TestTCPNode(unittest.IsolatedAsyncioTestCase):
 class TestTCPNodeTLS(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
-        cert_path, key_path = generate_certificate(
-            Path(self.temp_dir.name)
-        )
+        cert_path, key_path = generate_certificate(Path(self.temp_dir.name))
 
         self.server_context = create_server_context(
             cert_path,
