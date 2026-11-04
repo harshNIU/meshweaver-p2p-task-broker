@@ -1,7 +1,8 @@
-﻿"""Coordinate task recovery and replacement-worker submission."""
+"""Coordinate task recovery and replacement-worker submission."""
 
 import inspect
 from collections.abc import Callable
+from pathlib import Path
 from threading import RLock
 
 from execution.models import Task, TaskResult, TaskStatus
@@ -30,20 +31,47 @@ class TaskRecoveryCoordinator:
         max_age: float = 15.0,
         store: SQLiteTaskStore | None = None,
     ) -> None:
+        if not isinstance(lifecycle, TaskLifecycle):
+            raise TypeError("lifecycle must be a TaskLifecycle")
+
         if not callable(snapshot):
             raise TypeError("snapshot must be callable")
+
         if not callable(submit):
             raise TypeError("submit must be callable")
+
+        lifecycle_store = lifecycle.store
+
+        if store is None:
+            store = lifecycle_store
+        elif lifecycle_store is None:
+            raise ValueError(
+                "A recovery store requires TaskLifecycle to use the same store"
+            )
+        elif store is not lifecycle_store:
+            lifecycle_path = Path(lifecycle_store.db_path).resolve()
+            recovery_path = Path(store.db_path).resolve()
+
+            if lifecycle_path != recovery_path:
+                raise ValueError(
+                    "TaskRecoveryCoordinator and TaskLifecycle must use "
+                    "the same persistence database"
+                )
+
+            # Use the lifecycle's store instance as the single authority.
+            store = lifecycle_store
 
         self.lifecycle = lifecycle
         self.snapshot = snapshot
         self.submit = submit
         self.store = store
+
         self.routing_policy = {
             "max_cpu": max_cpu,
             "max_ram": max_ram,
             "max_age": max_age,
         }
+
         self._tasks: dict[str, Task] = {}
         self._lock = RLock()
 
@@ -56,14 +84,17 @@ class TaskRecoveryCoordinator:
         """Register a running task and retain its original payload."""
         if not isinstance(task, Task):
             raise TypeError("task must be a Task")
+
         if not isinstance(node_id, str) or not node_id.strip():
             raise ValueError("node_id must be a non-empty string")
 
         with self._lock:
             if task.task_id in self._tasks:
                 raise ValueError(f"Task already registered: {task.task_id}")
+
             if self.lifecycle.get(task.task_id) is not None:
                 raise ValueError(f"Task already exists: {task.task_id}")
+
             if self.store is not None and self.store.get(task.task_id) is not None:
                 raise ValueError(f"Task already exists in storage: {task.task_id}")
 
@@ -75,7 +106,10 @@ class TaskRecoveryCoordinator:
                     self.store.save_task(task)
                     payload_saved = True
 
-                self.lifecycle.create(task.task_id, task.task_name)
+                self.lifecycle.create(
+                    task.task_id,
+                    task.task_name,
+                )
                 lifecycle_created = True
 
                 self.lifecycle.transition(
@@ -83,7 +117,11 @@ class TaskRecoveryCoordinator:
                     TaskState.ASSIGNED,
                     node=node_id,
                 )
-                self.lifecycle.transition(task.task_id, TaskState.RUNNING)
+
+                self.lifecycle.transition(
+                    task.task_id,
+                    TaskState.RUNNING,
+                )
 
             except Exception:
                 if lifecycle_created:
@@ -100,8 +138,12 @@ class TaskRecoveryCoordinator:
         """Mark a reserved recovery attempt as failed."""
         with self._lock:
             record = self.lifecycle.get(task_id)
+
             if record is not None and record.state == TaskState.ASSIGNED:
-                self.lifecycle.transition(task_id, TaskState.FAILED)
+                self.lifecycle.transition(
+                    task_id,
+                    TaskState.FAILED,
+                )
 
     async def _submit_reserved(
         self,
@@ -111,6 +153,7 @@ class TaskRecoveryCoordinator:
         """Submit a task already reserved on a replacement node."""
         try:
             submission = self.submit(replacement, task)
+
             if inspect.isawaitable(submission):
                 submission = await submission
 
@@ -129,10 +172,11 @@ class TaskRecoveryCoordinator:
 
         except Exception as exc:  # noqa: BLE001
             self._mark_failed(task.task_id)
+
             return TaskResult(
                 task.task_id,
                 TaskStatus.FAILED,
-                error=("Recovery outcome uncertain: " f"{type(exc).__name__}: {exc}"),
+                error=f"Recovery outcome uncertain: {type(exc).__name__}: {exc}",
             )
 
         with self._lock:
@@ -150,14 +194,27 @@ class TaskRecoveryCoordinator:
                 )
 
             if submission.status == TaskStatus.COMPLETED:
-                self.lifecycle.transition(task.task_id, TaskState.RUNNING)
-                self.lifecycle.transition(task.task_id, TaskState.DONE)
+                self.lifecycle.transition(
+                    task.task_id,
+                    TaskState.RUNNING,
+                )
+
+                self.lifecycle.transition(
+                    task.task_id,
+                    TaskState.DONE,
+                )
             else:
-                self.lifecycle.transition(task.task_id, TaskState.FAILED)
+                self.lifecycle.transition(
+                    task.task_id,
+                    TaskState.FAILED,
+                )
 
         return submission
 
-    async def recover_node(self, dead_node_id: str) -> list[TaskResult]:
+    async def recover_node(
+        self,
+        dead_node_id: str,
+    ) -> list[TaskResult]:
         """Recover RUNNING tasks from a dead worker."""
         if not isinstance(dead_node_id, str) or not dead_node_id.strip():
             raise ValueError("dead_node_id must be a non-empty string")
@@ -193,7 +250,9 @@ class TaskRecoveryCoordinator:
             try:
                 with self._lock:
                     self.lifecycle.reassign_running(
-                        task_id, dead_node_id, replacement.node_id
+                        task_id,
+                        dead_node_id,
+                        replacement.node_id,
                     )
             except (KeyError, ValueError):
                 continue
@@ -203,10 +262,13 @@ class TaskRecoveryCoordinator:
         return results
 
     async def recover_interrupted(self) -> list[TaskResult]:
-        """Recover persisted ASSIGNED tasks after coordinator restart.
+        """Recover persisted RUNNING and ASSIGNED tasks after coordinator restart.
 
         The previously assigned worker is excluded because the coordinator
         cannot safely assume that the old submission did not start.
+
+        RUNNING tasks are first moved back to ASSIGNED through
+        reassign_running(). ASSIGNED tasks use reassign_assigned().
         """
         results: list[TaskResult] = []
 
@@ -214,19 +276,20 @@ class TaskRecoveryCoordinator:
             candidates = [
                 item
                 for item in self.lifecycle.snapshot()
-                if item["state"] == TaskState.ASSIGNED.value
+                if item["state"]
+                in (TaskState.RUNNING.value, TaskState.ASSIGNED.value)
             ]
 
         for item in candidates:
             task_id = str(item["task_id"])
             previous_node = str(item["node"])
+            previous_state = item["state"]
 
             with self._lock:
                 task = self._tasks.get(task_id)
 
             if task is None:
-                # Keep the durable record ASSIGNED. The payload may be
-                # temporarily unavailable or stored separately.
+                # Keep the durable lifecycle record unchanged.
                 continue
 
             try:
@@ -236,16 +299,23 @@ class TaskRecoveryCoordinator:
                     **self.routing_policy,
                 )
             except NoAvailableNodes:
-                # Leave ASSIGNED so a later recovery pass can retry.
+                # Leave the task unchanged so a later recovery pass can retry.
                 continue
 
             try:
                 with self._lock:
-                    self.lifecycle.reassign_assigned(
-                        task_id,
-                        previous_node,
-                        replacement.node_id,
-                    )
+                    if previous_state == TaskState.RUNNING.value:
+                        self.lifecycle.reassign_running(
+                            task_id,
+                            previous_node,
+                            replacement.node_id,
+                        )
+                    else:
+                        self.lifecycle.reassign_assigned(
+                            task_id,
+                            previous_node,
+                            replacement.node_id,
+                        )
             except (KeyError, ValueError):
                 continue
 

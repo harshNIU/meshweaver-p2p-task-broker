@@ -71,7 +71,7 @@ class FakeProtocol:
 def install_fake_node(monkeypatch, protocol, transport):
     calls = {}
 
-    async def fake_start_udp_node(host, port, node_id, execution_engine=None):
+    async def fake_start_udp_node(host, port, node_id, execution_engine=None, **kwargs):
         calls.update(
             host=host,
             port=port,
@@ -90,7 +90,7 @@ def test_start_command(monkeypatch):
     protocol = FakeProtocol()
     tcp_server = FakeTCPServer()
 
-    async def fake_start_udp_node(host, port, node_id, execution_engine=None):
+    async def fake_start_udp_node(host, port, node_id, execution_engine=None, **kwargs):
         calls.update(
             host=host,
             port=port,
@@ -103,6 +103,7 @@ def test_start_command(monkeypatch):
         host="127.0.0.1",
         port=0,
         execution_engine=None,
+        **kwargs,
     ):
         calls["tcp_host"] = host
         calls["tcp_port_requested"] = port
@@ -267,7 +268,7 @@ def test_start_bootstrap_joins_seed(monkeypatch):
             calls["tcp_host"] = host
             calls["tcp_port"] = port
 
-    async def fake_start_udp_node(host, port, node_id, execution_engine=None):
+    async def fake_start_udp_node(host, port, node_id, execution_engine=None, **kwargs):
         return transport, FakeBootstrapProtocol()
 
     async def fake_request_peer_list(protocol, node_id, seed, timeout):

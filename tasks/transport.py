@@ -111,7 +111,7 @@ async def send_task(
             task.task_id,
             TaskStatus(data["status"]),
             attempts=data.get("attempts", 0),
-            value=data.get("value"),
+            value=data.get("result", data.get("value")),
             error=data.get("error"),
             duration_seconds=data.get("duration_seconds", 0.0),
         )

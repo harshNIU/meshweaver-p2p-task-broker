@@ -5,6 +5,8 @@ import json
 import math
 import time
 import uuid
+from dataclasses import replace
+from pathlib import Path
 
 import typer
 
@@ -140,6 +142,50 @@ def _wait_for_task_result(protocol, seq, task_id, timeout):
     raise TimeoutError(f"Timed out waiting for task result ({timeout:g}s).")
 
 
+def _build_recovery_snapshot(protocol, local_node_id):
+    """Return live workers with their advertised TCP endpoints."""
+    if protocol is None:
+        return []
+
+    registry = getattr(protocol, "node_registry", {})
+    peer_manager = getattr(protocol, "peer_manager", None)
+
+    if not isinstance(registry, dict) or peer_manager is None:
+        return []
+
+    workers = []
+
+    for peer_id, peer in registry.items():
+        if peer_id == local_node_id:
+            continue
+
+        if not peer_manager.is_peer_alive(peer_id):
+            continue
+
+        tcp_address = peer_manager.get_peer_tcp_address(peer_id)
+
+        if not isinstance(tcp_address, (tuple, list)) or len(tcp_address) != 2:
+            continue
+
+        tcp_host, tcp_port = tcp_address
+
+        if (
+            not isinstance(tcp_host, str)
+            or not tcp_host.strip()
+            or not isinstance(tcp_port, int)
+            or isinstance(tcp_port, bool)
+            or not 1 <= tcp_port <= 65535
+        ):
+            continue
+
+        try:
+            workers.append(replace(peer, host=tcp_host, port=tcp_port))
+        except (TypeError, ValueError):
+            continue
+
+    return workers
+
+
 @app.command()
 def start(
     host: str = typer.Option("127.0.0.1", help="Host address to bind."),
@@ -158,6 +204,11 @@ def start(
     ),
     web: bool = typer.Option(False, "--web", help="Start the web dashboard."),
     web_port: int = typer.Option(8765, help="Dashboard HTTP port."),
+    task_db: str | None = typer.Option(
+        None,
+        "--task-db",
+        help="SQLite recovery database path. Defaults to ~/.meshweaver/tasks.sqlite3.",
+    ),
 ):
     """Start a UDP node and optionally its dashboard."""
     _validate_port(port, "port")
@@ -170,30 +221,102 @@ def start(
         protocol = None
         tcp_server = None
         dashboard = None
+        recovery_coordinator = None
+        shared_secret = None
+        store = None
 
         try:
             local_node_id = node_id or f"node-{port}"
 
-            transport, protocol = await start_udp_node(
-                host=host,
-                port=port,
-                node_id=local_node_id,
-                execution_engine=engine,
+            # Recovery and dashboard submissions require authenticated TCP.
+            from security.message_signing import (
+                MessageAuthenticationError,
+                load_shared_secret,
             )
+
+            try:
+                shared_secret = load_shared_secret()
+            except MessageAuthenticationError as exc:
+                if web:
+                    typer.echo(f"Dashboard submissions disabled: {exc}")
+                shared_secret = None
+
+            # Only enable persistent recovery when authenticated transport
+            # is available. Never silently submit recovery tasks unsigned.
+            if shared_secret is not None:
+                from tasks.lifecycle import TaskLifecycle
+                from tasks.recovery import TaskRecoveryCoordinator
+                from tasks.store import SQLiteTaskStore
+                from tasks.transport import send_task
+
+                database_path = (
+                    Path(task_db).expanduser()
+                    if task_db
+                    else Path.home() / ".meshweaver" / "tasks.sqlite3"
+                )
+                database_path.parent.mkdir(parents=True, exist_ok=True)
+
+                store = SQLiteTaskStore(database_path)
+                lifecycle = TaskLifecycle(store=store)
+
+                async def submit_recovery(peer, task):
+                    return await send_task(
+                        peer,
+                        task,
+                        secret=shared_secret,
+                        sender_id=local_node_id,
+                    )
+
+                recovery_coordinator = TaskRecoveryCoordinator(
+                    lifecycle=lifecycle,
+                    snapshot=lambda: _build_recovery_snapshot(
+                        protocol,
+                        local_node_id,
+                    ),
+                    submit=submit_recovery,
+                    store=store,
+                )
+
+                typer.echo(f"Persistent task recovery enabled: {database_path}")
+            else:
+                typer.echo(
+                    "Persistent task recovery disabled: "
+                    "a valid shared secret is required."
+                )
+
+            udp_options = {
+                "host": host,
+                "port": port,
+                "node_id": local_node_id,
+                "execution_engine": engine,
+            }
+
+            if shared_secret is not None:
+                udp_options["secret"] = shared_secret
+                udp_options["recovery_coordinator"] = recovery_coordinator
+
+            transport, protocol = await start_udp_node(**udp_options)
 
             # Bind TCP independently. Port 0 asks the OS for an available port;
             # the actual bound port is advertised to UDP peers below.
-            tcp_server, _ = await start_tcp_server(
-                host=host,
-                port=0,
-                execution_engine=engine,
-            )
+            tcp_options = {
+                "host": host,
+                "port": 0,
+                "execution_engine": engine,
+            }
+
+            if shared_secret is not None:
+                tcp_options["secret"] = shared_secret
+
+            tcp_server, _ = await start_tcp_server(**tcp_options)
 
             if not tcp_server.sockets:
                 raise RuntimeError("TCP server started without a listening socket.")
 
             tcp_port = tcp_server.sockets[0].getsockname()[1]
             protocol.set_tcp_endpoint(host, tcp_port)
+
+            joined = False
 
             if seed:
                 seed_address = parse_seed_address(seed)
@@ -210,27 +333,28 @@ def start(
                 else:
                     typer.echo(f"Could not discover peers through seed {seed}")
 
+            # Try interrupted-task recovery only after peer discovery.
+            if recovery_coordinator is not None and joined:
+                try:
+                    recovered = await recovery_coordinator.recover_interrupted()
+                    typer.echo(
+                        f"Interrupted-task recovery completed: "
+                        f"{len(recovered)} task(s) resubmitted."
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    typer.echo(f"Interrupted-task recovery encountered an error: {exc}")
+
             typer.echo(f"MeshWeaver node running at {host}:{port}")
             typer.echo(f"TCP server listening at {host}:{tcp_port}")
 
             if web:
-                from security.message_signing import (
-                    MessageAuthenticationError,
-                    load_shared_secret,
-                )
                 from web.server import create_dashboard_server
                 from web.snapshot import build_snapshot
                 from web.submission import create_dashboard_submitter
 
-                # Dashboard HTTP requests execute in separate threads.
-                # Capture this node's running event loop so the submitter
-                # can safely schedule authenticated TCP work on it.
                 loop = asyncio.get_running_loop()
 
-                try:
-                    shared_secret = load_shared_secret()
-                except MessageAuthenticationError as exc:
-                    typer.echo(f"Dashboard submissions disabled: {exc}")
+                if shared_secret is None:
                     task_submitter = None
                 else:
                     task_submitter = create_dashboard_submitter(
@@ -239,6 +363,7 @@ def start(
                         task_registry=engine.task_registry,
                         local_node_id=local_node_id,
                         secret=shared_secret,
+                        recovery_coordinator=recovery_coordinator,
                     )
 
                 dashboard = create_dashboard_server(

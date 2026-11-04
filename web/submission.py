@@ -1,3 +1,4 @@
+
 """Authenticated remote task submission for the MeshWeaver dashboard."""
 
 import asyncio
@@ -5,6 +6,7 @@ import concurrent.futures
 from dataclasses import replace
 
 from execution.models import Task, TaskResult, TaskStatus
+from tasks.lifecycle import TaskState
 from tasks.submit import TaskClient
 from tasks.transport import send_task
 
@@ -18,6 +20,7 @@ def create_dashboard_submitter(
     task_registry,
     local_node_id,
     secret,
+    recovery_coordinator=None,
 ):
     """Create a synchronous HTTP callback for authenticated remote TCP work."""
 
@@ -54,7 +57,7 @@ def create_dashboard_submitter(
 
             if (
                 not isinstance(tcp_host, str)
-                or not tcp_host
+                or not tcp_host.strip()
                 or not isinstance(tcp_port, int)
                 or isinstance(tcp_port, bool)
                 or not 1 <= tcp_port <= 65535
@@ -105,10 +108,39 @@ def create_dashboard_submitter(
 
         task_registry.mark_pending(task)
 
-        responding_node = None
+        active_node = None
+        registered = False
+        received_valid_result = False
+        attempt_count = 0
 
         async def authenticated_send(peer, submitted_task):
-            nonlocal responding_node
+            nonlocal active_node
+            nonlocal registered
+            nonlocal received_valid_result
+            nonlocal attempt_count
+
+            peer_id = peer.node_id
+            attempt_count += 1
+
+            if recovery_coordinator is not None:
+                lifecycle = recovery_coordinator.lifecycle
+
+                if not registered:
+                    recovery_coordinator.register(submitted_task, peer_id)
+                    registered = True
+
+                elif active_node != peer_id:
+                    lifecycle.reassign_running(
+                        submitted_task.task_id,
+                        active_node,
+                        peer_id,
+                    )
+                    lifecycle.transition(
+                        submitted_task.task_id,
+                        TaskState.RUNNING,
+                    )
+
+            active_node = peer_id
 
             result = await send_task(
                 peer,
@@ -117,8 +149,17 @@ def create_dashboard_submitter(
                 sender_id=local_node_id,
             )
 
-            # Only record a worker after it has returned a valid response.
-            responding_node = peer.node_id
+            if (
+                isinstance(result, TaskResult)
+                and result.task_id == submitted_task.task_id
+                and result.status in (
+                    TaskStatus.COMPLETED,
+                    TaskStatus.FAILED,
+                    TaskStatus.CANCELLED,
+                )
+            ):
+                received_valid_result = True
+
             return result
 
         client = TaskClient(
@@ -138,32 +179,82 @@ def create_dashboard_submitter(
         except concurrent.futures.TimeoutError as exc:
             future.cancel()
 
+            error_message = (
+                "Timed out waiting for the remote worker; "
+                "execution may have occurred."
+            )
+
+            if active_node is not None:
+                task_registry.mark_assigned(task, active_node)
+                task_registry.mark_outcome_uncertain(task, error_message)
+
+                return {
+                    "task_id": task.task_id,
+                    "state": "OUTCOME_UNCERTAIN",
+                    "node": active_node,
+                    "attempts": attempt_count,
+                    "error": error_message,
+                }
+
             failed_result = TaskResult(
                 task.task_id,
                 TaskStatus.FAILED,
-                error="Timed out waiting for the remote worker.",
+                error="Timed out before contacting a remote worker.",
             )
             task_registry.mark_result(task, failed_result)
 
-            raise RuntimeError("Remote task submission timed out.") from exc
+            raise RuntimeError(
+                "Remote task submission timed out before contacting a worker."
+            ) from exc
 
         except Exception:
             future.cancel()
             raise
 
-        if responding_node is None:
+        if active_node is None:
             task_registry.mark_result(task, result)
             raise RuntimeError(
                 result.error or "No authenticated remote worker responded."
             )
 
-        task_registry.mark_assigned(task, responding_node)
+        if not received_valid_result:
+            error_message = (
+                result.error
+                or "No authenticated result was received; "
+                "remote execution may have occurred."
+            )
+
+            task_registry.mark_assigned(task, active_node)
+            task_registry.mark_outcome_uncertain(task, error_message)
+
+            return {
+                "task_id": task.task_id,
+                "state": "OUTCOME_UNCERTAIN",
+                "node": active_node,
+                "attempts": result.attempts or attempt_count,
+                "error": error_message,
+            }
+
+        if recovery_coordinator is not None and registered:
+            lifecycle = recovery_coordinator.lifecycle
+            record = lifecycle.get(task.task_id)
+
+            if record is not None and record.state == TaskState.RUNNING:
+                if result.status == TaskStatus.COMPLETED:
+                    lifecycle.transition(task.task_id, TaskState.DONE)
+                elif result.status in (
+                    TaskStatus.FAILED,
+                    TaskStatus.CANCELLED,
+                ):
+                    lifecycle.transition(task.task_id, TaskState.FAILED)
+
+        task_registry.mark_assigned(task, active_node)
         task_registry.mark_result(task, result)
 
         return {
             "task_id": task.task_id,
             "state": result.status.value.upper(),
-            "node": responding_node,
+            "node": active_node,
             "attempts": result.attempts,
         }
 

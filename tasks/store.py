@@ -114,7 +114,7 @@ class SQLiteTaskStore:
             )
 
     def save_task(self, task: Task) -> None:
-        """Persist an original task and its execution payload."""
+        """Persist a new task without allowing duplicate IDs to overwrite it."""
         if not isinstance(task, Task):
             raise TypeError("task must be a Task")
 
@@ -130,12 +130,13 @@ class SQLiteTaskStore:
         )
 
         with self._connect() as connection:
+            # A task ID is unique across both metadata and payload.
+            # Do not silently attach or replace a payload for an existing ID.
             connection.execute(
                 """
                 INSERT INTO task_records
                     (task_id, name, state, node, attempts)
                 VALUES (?, ?, ?, ?, ?)
-                ON CONFLICT(task_id) DO NOTHING
                 """,
                 (
                     task.task_id,
@@ -150,8 +151,6 @@ class SQLiteTaskStore:
                 """
                 INSERT INTO task_payloads (task_id, payload)
                 VALUES (?, ?)
-                ON CONFLICT(task_id) DO UPDATE SET
-                    payload = excluded.payload
                 """,
                 (task.task_id, payload),
             )

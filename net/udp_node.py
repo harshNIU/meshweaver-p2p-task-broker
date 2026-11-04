@@ -48,6 +48,7 @@ class UDPProtocol(asyncio.DatagramProtocol):
         secret=None,
         send_queue_size=DEFAULT_SEND_QUEUE_SIZE,
         send_rate_limit=DEFAULT_SEND_RATE_LIMIT,
+        recovery_coordinator=None,
     ):
         """Initialize the UDP protocol and its bounded outgoing queue."""
         if not isinstance(send_queue_size, int) or isinstance(send_queue_size, bool):
@@ -83,6 +84,16 @@ class UDPProtocol(asyncio.DatagramProtocol):
         self._cleanup_task = None
         self._heartbeat_task = None
         self._heartbeat_seq = int(time.time_ns())
+
+        if recovery_coordinator is not None and not callable(
+            getattr(recovery_coordinator, "recover_node", None)
+        ):
+            raise TypeError(
+                "recovery_coordinator must provide a callable recover_node method"
+            )
+        self.recovery_coordinator = recovery_coordinator
+        self._recovery_tasks = {}
+        self._pending_recovery_peers = set()
 
         self.peer_manager = (
             peer_manager if peer_manager is not None else PeerConnectionManager()
@@ -546,13 +557,12 @@ class UDPProtocol(asyncio.DatagramProtocol):
             return
 
         self.send_message(reply, addr)
-
     def error_received(self, exc):
         """Report UDP transport errors."""
         print(f"UDP error: {exc}")
 
     def connection_lost(self, exc):
-        """Cancel background cleanup when the UDP transport closes."""
+        """Cancel background tasks when the UDP transport closes."""
         task = self._cleanup_task
         self._cleanup_task = None
 
@@ -574,16 +584,73 @@ class UDPProtocol(asyncio.DatagramProtocol):
                 tcp_task.cancel()
         self._tcp_send_tasks.clear()
 
+        for recovery_task in list(self._recovery_tasks.values()):
+            if not recovery_task.done():
+                recovery_task.cancel()
+        self._recovery_tasks.clear()
+
         self.transport = None
         print(f"UDP node {self.node_id} stopped")
 
     def cleanup_expired_peers(self, now=None):
-        """Remove expired peers and their saved addresses."""
+        """Remove expired peers and schedule recovery for their running tasks."""
         removed = self.peer_manager.remove_expired_peers(now=now)
         for peer_id in removed:
             if peer_id != self.node_id:
                 self.node_registry.pop(peer_id, None)
+                if self.recovery_coordinator is not None:
+                    self._pending_recovery_peers.add(peer_id)
+
+        # Also drain IDs queued by earlier synchronous cleanup calls. The peer
+        # may already have been removed from PeerConnectionManager by then.
+        self._schedule_pending_peer_recoveries()
         return removed
+
+    def _schedule_peer_recovery(self, peer_id):
+        """Queue recovery and schedule it when an event loop is available."""
+        if self.recovery_coordinator is None:
+            return None
+
+        self._pending_recovery_peers.add(peer_id)
+        self._schedule_pending_peer_recoveries()
+        return self._recovery_tasks.get(peer_id)
+
+    def _schedule_pending_peer_recoveries(self):
+        """Schedule queued peer recoveries without creating duplicates."""
+        if self.recovery_coordinator is None or not self._pending_recovery_peers:
+            return
+
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            # Preserve pending IDs; a later event-loop-driven cleanup will drain them.
+            return
+
+        for peer_id in tuple(self._pending_recovery_peers):
+            existing = self._recovery_tasks.get(peer_id)
+            if existing is not None and not existing.done():
+                self._pending_recovery_peers.discard(peer_id)
+                continue
+
+            self._pending_recovery_peers.discard(peer_id)
+            task = loop.create_task(self._recover_expired_peer(peer_id))
+            self._recovery_tasks[peer_id] = task
+
+    async def _recover_expired_peer(self, peer_id):
+        """Ask the configured coordinator to recover tasks from a dead peer."""
+        current_task = asyncio.current_task()
+        try:
+            await self.recovery_coordinator.recover_node(peer_id)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            print(
+                f"UDP node {self.node_id} could not recover tasks from "
+                f"expired peer {peer_id}: {exc}"
+            )
+        finally:
+            if self._recovery_tasks.get(peer_id) is current_task:
+                self._recovery_tasks.pop(peer_id, None)
 
     def _tcp_address_for_udp_peer(self, udp_address):
         """Find the advertised TCP endpoint for a known UDP peer."""
@@ -661,6 +728,7 @@ async def start_udp_node(
     secret=None,
     send_queue_size=DEFAULT_SEND_QUEUE_SIZE,
     send_rate_limit=DEFAULT_SEND_RATE_LIMIT,
+    recovery_coordinator=None,
 ):
     """Start a UDP node and return its transport and protocol."""
     loop = asyncio.get_running_loop()
@@ -673,6 +741,7 @@ async def start_udp_node(
             secret=secret,
             send_queue_size=send_queue_size,
             send_rate_limit=send_rate_limit,
+            recovery_coordinator=recovery_coordinator,
         ),
         local_addr=(host, port),
     )

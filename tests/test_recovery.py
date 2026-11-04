@@ -1,13 +1,16 @@
 """Tests for task recovery coordination."""
 
+import tempfile
 import time
 import unittest
-from unittest.mock import AsyncMock
+from pathlib import Path
+from unittest.mock import AsyncMock, Mock
 
 from execution.models import Task, TaskResult, TaskStatus
 from gossip.state import NodeInfo
 from tasks.lifecycle import TaskLifecycle, TaskState
 from tasks.recovery import TaskRecoveryCoordinator
+from tasks.store import SQLiteTaskStore
 
 
 def make_node(node_id: str, cpu: float = 10) -> NodeInfo:
@@ -137,17 +140,8 @@ class RecoveryTests(unittest.IsolatedAsyncioTestCase):
             await self.coordinator.recover_node("")
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class RecoveryPersistenceTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
-        import tempfile
-        from pathlib import Path
-
-        from tasks.store import SQLiteTaskStore
-
         self.temp_dir = tempfile.TemporaryDirectory()
         self.db_path = Path(self.temp_dir.name) / "meshweaver.db"
         self.store = SQLiteTaskStore(self.db_path)
@@ -160,6 +154,7 @@ class RecoveryPersistenceTests(unittest.IsolatedAsyncioTestCase):
     async def test_registration_persists_task_payload(self):
         lifecycle = TaskLifecycle(store=self.store)
         submit = AsyncMock()
+
         coordinator = TaskRecoveryCoordinator(
             lifecycle,
             snapshot=lambda: [self.dead, self.replacement],
@@ -173,6 +168,7 @@ class RecoveryPersistenceTests(unittest.IsolatedAsyncioTestCase):
             kwargs={"operation": "add"},
             task_id="persistent-task-1",
         )
+
         coordinator.register(task, "node-dead")
 
         restored = self.store.get_task(task.task_id)
@@ -184,20 +180,24 @@ class RecoveryPersistenceTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_new_coordinator_restores_saved_task_payloads(self):
         lifecycle = TaskLifecycle(store=self.store)
+
         first = TaskRecoveryCoordinator(
             lifecycle,
             snapshot=lambda: [self.dead, self.replacement],
             submit=AsyncMock(),
             store=self.store,
         )
+
         task = Task(
             "calculate",
             args=(7, 8),
             task_id="persistent-task-2",
         )
+
         first.register(task, "node-dead")
 
         restarted_lifecycle = TaskLifecycle(store=self.store)
+
         restarted_submit = AsyncMock(
             return_value=TaskResult(
                 task.task_id,
@@ -206,6 +206,7 @@ class RecoveryPersistenceTests(unittest.IsolatedAsyncioTestCase):
                 attempts=1,
             )
         )
+
         restarted = TaskRecoveryCoordinator(
             restarted_lifecycle,
             snapshot=lambda: [self.dead, self.replacement],
@@ -218,16 +219,20 @@ class RecoveryPersistenceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(results), 1)
         self.assertEqual(results[0].task_id, task.task_id)
         self.assertEqual(results[0].status, TaskStatus.COMPLETED)
-        restarted_submit.assert_awaited_once_with(self.replacement, task)
+
+        restarted_submit.assert_awaited_once_with(
+            self.replacement,
+            task,
+        )
 
     async def test_registration_payload_failure_does_not_start_task(self):
-        from unittest.mock import Mock
-
-        lifecycle = TaskLifecycle()
         store = Mock()
-        store.get.return_value = None
+        store.list_tasks.return_value = []
         store.list_task_payloads.return_value = []
+        store.get.return_value = None
         store.save_task.side_effect = OSError("database unavailable")
+
+        lifecycle = TaskLifecycle(store=store)
 
         coordinator = TaskRecoveryCoordinator(
             lifecycle,
@@ -236,10 +241,184 @@ class RecoveryPersistenceTests(unittest.IsolatedAsyncioTestCase):
             store=store,
         )
 
-        task = Task("calculate", args=(2, 3), task_id="save-failure-task")
+        task = Task(
+            "calculate",
+            args=(2, 3),
+            task_id="save-failure-task",
+        )
 
         with self.assertRaisesRegex(OSError, "database unavailable"):
             coordinator.register(task, "node-dead")
 
-        record = lifecycle.get(task.task_id)
-        self.assertIsNone(record)
+        self.assertIsNone(lifecycle.get(task.task_id))
+        store.save_task.assert_called_once_with(task)
+
+    async def test_coordinator_inherits_lifecycle_store(self):
+        lifecycle = TaskLifecycle(store=self.store)
+
+        coordinator = TaskRecoveryCoordinator(
+            lifecycle,
+            snapshot=lambda: [self.dead, self.replacement],
+            submit=AsyncMock(),
+        )
+
+        self.assertIs(coordinator.store, self.store)
+
+    async def test_coordinator_rejects_store_without_lifecycle_store(self):
+        lifecycle = TaskLifecycle()
+
+        with self.assertRaisesRegex(ValueError, "same store"):
+            TaskRecoveryCoordinator(
+                lifecycle,
+                snapshot=lambda: [self.dead, self.replacement],
+                submit=AsyncMock(),
+                store=self.store,
+            )
+
+    async def test_coordinator_rejects_different_databases(self):
+        other_store = SQLiteTaskStore(self.db_path.parent / "different.db")
+
+        lifecycle = TaskLifecycle(store=self.store)
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "same persistence database",
+        ):
+            TaskRecoveryCoordinator(
+                lifecycle,
+                snapshot=lambda: [self.dead, self.replacement],
+                submit=AsyncMock(),
+                store=other_store,
+            )
+
+    async def test_coordinator_accepts_separate_instances_for_same_database(self):
+        lifecycle = TaskLifecycle(store=self.store)
+        second_instance = SQLiteTaskStore(self.db_path)
+
+        coordinator = TaskRecoveryCoordinator(
+            lifecycle,
+            snapshot=lambda: [self.dead, self.replacement],
+            submit=AsyncMock(),
+            store=second_instance,
+        )
+
+        self.assertIs(coordinator.store, self.store)
+
+
+    async def test_recover_interrupted_running_task_after_restart(self):
+        lifecycle = TaskLifecycle(store=self.store)
+        first = TaskRecoveryCoordinator(
+            lifecycle,
+            snapshot=lambda: [self.dead, self.replacement],
+            submit=AsyncMock(),
+        )
+
+        task = Task(
+            "calculate",
+            args=(7, 8),
+            task_id="interrupted-running-task",
+        )
+        first.register(task, "node-dead")
+
+        restarted_lifecycle = TaskLifecycle(store=self.store)
+        restarted_submit = AsyncMock(
+            return_value=TaskResult(
+                task.task_id,
+                TaskStatus.COMPLETED,
+                value=15,
+                attempts=1,
+            )
+        )
+
+        restarted = TaskRecoveryCoordinator(
+            restarted_lifecycle,
+            snapshot=lambda: [self.dead, self.replacement],
+            submit=restarted_submit,
+        )
+
+        results = await restarted.recover_interrupted()
+
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0].status, TaskStatus.COMPLETED)
+        restarted_submit.assert_awaited_once_with(self.replacement, task)
+
+        record = restarted_lifecycle.get(task.task_id)
+        self.assertEqual(record.state, TaskState.DONE)
+        self.assertEqual(record.node, "node-replacement")
+
+    async def test_recover_interrupted_assigned_task_after_restart(self):
+        task = Task(
+            "calculate",
+            args=(9, 6),
+            task_id="interrupted-assigned-task",
+        )
+        self.store.save_task(task)
+
+        lifecycle = TaskLifecycle(store=self.store)
+        lifecycle.transition(
+            task.task_id,
+            TaskState.ASSIGNED,
+            node="node-dead",
+        )
+
+        restarted_lifecycle = TaskLifecycle(store=self.store)
+        restarted_submit = AsyncMock(
+            return_value=TaskResult(
+                task.task_id,
+                TaskStatus.COMPLETED,
+                value=15,
+                attempts=1,
+            )
+        )
+
+        restarted = TaskRecoveryCoordinator(
+            restarted_lifecycle,
+            snapshot=lambda: [self.dead, self.replacement],
+            submit=restarted_submit,
+        )
+
+        results = await restarted.recover_interrupted()
+
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0].status, TaskStatus.COMPLETED)
+        restarted_submit.assert_awaited_once_with(self.replacement, task)
+
+        record = restarted_lifecycle.get(task.task_id)
+        self.assertEqual(record.state, TaskState.DONE)
+        self.assertEqual(record.node, "node-replacement")
+    async def test_recover_interrupted_keeps_task_when_no_replacement_exists(self):
+        first_lifecycle = TaskLifecycle(store=self.store)
+        first = TaskRecoveryCoordinator(
+            first_lifecycle,
+            snapshot=lambda: [self.dead],
+            submit=AsyncMock(),
+            store=self.store,
+        )
+
+        task = Task(
+            "calculate",
+            args=(5, 10),
+            task_id="no-replacement-task",
+        )
+        first.register(task, "node-dead")
+
+        restarted_lifecycle = TaskLifecycle(store=self.store)
+        restarted_submit = AsyncMock()
+
+        restarted = TaskRecoveryCoordinator(
+            restarted_lifecycle,
+            snapshot=lambda: [self.dead],
+            submit=restarted_submit,
+            store=self.store,
+        )
+
+        results = await restarted.recover_interrupted()
+
+        self.assertEqual(results, [])
+        restarted_submit.assert_not_awaited()
+
+        record = restarted_lifecycle.get(task.task_id)
+        self.assertEqual(record.state, TaskState.RUNNING)
+        self.assertEqual(record.node, "node-dead")
+if __name__ == "__main__":
+    unittest.main()

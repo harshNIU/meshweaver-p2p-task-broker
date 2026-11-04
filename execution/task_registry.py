@@ -1,3 +1,4 @@
+
 """Thread-safe in-memory registry of actual task lifecycle records."""
 
 from __future__ import annotations
@@ -89,6 +90,28 @@ class TaskRegistry:
             self._event(
                 "ERROR" if result.status == TaskStatus.FAILED else "INFO",
                 f"Task {task.task_id} {result.status.value} ({task.task_name})",
+            )
+
+    def mark_outcome_uncertain(self, task: Task, error: str) -> None:
+        """Record that remote execution may have occurred but no result arrived."""
+        with self._lock:
+            record = self._records.setdefault(
+                task.task_id,
+                {
+                    "task_id": task.task_id,
+                    "name": task.task_name,
+                    "assigned_to": None,
+                    "attempt": 0,
+                    "created_at": time.time(),
+                },
+            )
+            record.update(
+                status="OUTCOME_UNCERTAIN",
+                error=error,
+            )
+            self._event(
+                "WARNING",
+                f"Task {task.task_id} outcome is uncertain ({task.task_name})",
             )
 
     def _event(self, level: str, message: str) -> None:

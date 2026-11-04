@@ -58,6 +58,11 @@ class TaskLifecycle:
                     attempts=item["attempts"],
                 )
 
+    @property
+    def store(self) -> SQLiteTaskStore | None:
+        """Return the persistence store used by this lifecycle tracker."""
+        return self._store
+
     def _persist(self, record: TaskRecord) -> None:
         """Persist a lifecycle record when a store is configured."""
         if self._store is not None:
@@ -171,7 +176,7 @@ class TaskLifecycle:
         dead_node_id: str,
         new_node_id: str,
     ) -> TaskRecord:
-        """Reassign a running task from a dead node to a replacement."""
+        """Reassign a running task from a dead worker to a replacement."""
         if not isinstance(dead_node_id, str) or not dead_node_id.strip():
             raise ValueError("dead_node_id must be a non-empty string")
         if not isinstance(new_node_id, str) or not new_node_id.strip():
@@ -210,8 +215,8 @@ class TaskLifecycle:
     ) -> TaskRecord:
         """Move an interrupted ASSIGNED task to another worker.
 
-        This supports coordinator restart recovery. The task remains ASSIGNED;
-        the next successful transition to RUNNING increments its attempt count.
+        The task remains ASSIGNED; the next successful transition to RUNNING
+        increments its attempt count.
         """
         if not isinstance(current_node_id, str) or not current_node_id.strip():
             raise ValueError("current_node_id must be a non-empty string")
