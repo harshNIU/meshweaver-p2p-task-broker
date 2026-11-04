@@ -22,4 +22,8 @@ def merge_node_info(
 
             current[node.node_id] = node
 
+        elif node.tcp_port is not None and existing.tcp_port is None:
+            # Preserve newer node information while accepting missing TCP metadata.
+            current[node.node_id] = replace(existing, tcp_port=node.tcp_port)
+
     return current
