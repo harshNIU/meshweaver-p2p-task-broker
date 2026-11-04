@@ -1,7 +1,10 @@
 """Tests for TCP communication and message-size limits."""
 
 import asyncio
+import ssl
+import tempfile
 import unittest
+from pathlib import Path
 
 from net.messages import Message
 from net.tcp_node import (
@@ -10,6 +13,8 @@ from net.tcp_node import (
     send_tcp_message,
     start_tcp_server,
 )
+from scripts.gen_certs import generate_certificate
+from security.tls import create_client_context, create_server_context
 
 
 class TestTCPNode(unittest.IsolatedAsyncioTestCase):
@@ -170,6 +175,67 @@ class TestTCPNode(unittest.IsolatedAsyncioTestCase):
                 "original_type": "RESULT",
             },
         )
+
+
+class TestTCPNodeTLS(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        cert_path, key_path = generate_certificate(
+            Path(self.temp_dir.name)
+        )
+
+        self.server_context = create_server_context(
+            cert_path,
+            key_path,
+        )
+        self.client_context = create_client_context(cert_path)
+
+        self.server, self.received_messages = await start_tcp_server(
+            ssl_context=self.server_context
+        )
+
+        self.host, self.port = self.server.sockets[0].getsockname()[:2]
+
+    async def asyncTearDown(self):
+        self.server.close()
+        await self.server.wait_closed()
+        self.temp_dir.cleanup()
+
+    async def test_trusted_client_connects_over_tls(self):
+        message = Message(
+            type="PING",
+            sender_id="tls-client",
+            seq=1,
+            payload={"test": True},
+        )
+
+        response = await send_tcp_message(
+            self.host,
+            self.port,
+            message,
+            ssl_context=self.client_context,
+        )
+
+        self.assertEqual(response.payload["received"], True)
+        self.assertEqual(len(self.received_messages), 1)
+
+    async def test_untrusted_client_is_rejected(self):
+        untrusted_context = ssl.create_default_context()
+
+        message = Message(
+            type="PING",
+            sender_id="untrusted-client",
+            seq=2,
+            payload={"test": True},
+        )
+
+        with self.assertRaises((ssl.SSLError, OSError)):
+            await send_tcp_message(
+                self.host,
+                self.port,
+                message,
+                ssl_context=untrusted_context,
+            )
 
 
 if __name__ == "__main__":
