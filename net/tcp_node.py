@@ -1,5 +1,8 @@
+"""TCP networking for task messages, authentication, and TLS transport."""
+
 import asyncio
 import json
+import ssl
 from typing import Any
 
 from execution.engine import ExecutionEngine
@@ -7,6 +10,7 @@ from execution.models import TaskStatus
 from execution.serializer import TaskSerializationError, deserialize_task
 from net.correlation import CorrelationManager, RequestTimeoutError
 from net.messages import TASK_ACK, TASK_ASSIGN, TASK_REQUEST, TASK_RESULT, Message
+from security.tls import create_server_context
 from security.message_signing import (
     MessageAuthenticationError,
     load_shared_secret,
@@ -253,6 +257,7 @@ async def start_tcp_server(
     execution_engine: ExecutionEngine | None = None,
     *,
     secret: bytes | None = None,
+    ssl_context: ssl.SSLContext | None = None,
 ) -> tuple[asyncio.AbstractServer, list[Message]]:
     """Start a TCP server with optional registered-task execution."""
     received_messages: list[Message] = []
@@ -274,6 +279,7 @@ async def start_tcp_server(
         host,
         port,
         limit=MAX_MESSAGE_SIZE,
+        ssl=ssl_context,
     )
 
     return server, received_messages
@@ -286,6 +292,7 @@ async def send_tcp_message(
     timeout: float = DEFAULT_REQUEST_TIMEOUT,
     *,
     secret: bytes | None = None,
+    ssl_context: ssl.SSLContext | None = None,
 ) -> Message:
     """Send a correlated TCP request and verify authenticated task responses."""
     if timeout <= 0:
@@ -311,6 +318,8 @@ async def send_tcp_message(
                     host,
                     port,
                     limit=MAX_MESSAGE_SIZE,
+                    ssl=ssl_context,
+                    server_hostname=host if ssl_context is not None else None,
                 ),
                 timeout=timeout,
             )

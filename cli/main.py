@@ -16,6 +16,7 @@ from net.bootstrap import parse_seed_address, request_peer_list
 from net.messages import TASK_REQUEST, TASK_RESULT, Message
 from net.tcp_node import start_tcp_server
 from net.udp_node import start_udp_node
+from security.tls import create_server_context
 
 app = typer.Typer(help="MeshWeaver P2P Task Broker")
 
@@ -158,10 +159,32 @@ def start(
     ),
     web: bool = typer.Option(False, "--web", help="Start the web dashboard."),
     web_port: int = typer.Option(8765, help="Dashboard HTTP port."),
+    tls_cert: str | None = typer.Option(
+        None,
+        "--tls-cert",
+        help="Path to the TLS certificate.",
+    ),
+    tls_key: str | None = typer.Option(
+        None,
+        "--tls-key",
+        help="Path to the TLS private key.",
+    ),
 ):
     """Start a UDP node and optionally its dashboard."""
     _validate_port(port, "port")
     _validate_port(web_port, "--web-port")
+
+    if bool(tls_cert) != bool(tls_key):
+        typer.echo("Both --tls-cert and --tls-key must be provided together.")
+        raise typer.Exit(code=1)
+
+    ssl_context = None
+    if tls_cert and tls_key:
+        try:
+            ssl_context = create_server_context(tls_cert, tls_key)
+        except (OSError, ValueError) as exc:
+            typer.echo(f"TLS configuration error: {exc}")
+            raise typer.Exit(code=1) from exc
 
     engine = _create_engine()
 
@@ -187,6 +210,7 @@ def start(
                 host=host,
                 port=0,
                 execution_engine=engine,
+                ssl_context=ssl_context,
             )
 
             if not tcp_server.sockets:

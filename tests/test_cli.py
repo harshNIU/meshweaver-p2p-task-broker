@@ -103,10 +103,12 @@ def test_start_command(monkeypatch):
         host="127.0.0.1",
         port=0,
         execution_engine=None,
+        ssl_context=None,
     ):
         calls["tcp_host"] = host
         calls["tcp_port_requested"] = port
         calls["tcp_execution_engine"] = execution_engine
+        calls["tcp_ssl_context"] = ssl_context
         return tcp_server, []
 
     async def finish_wait(self):
@@ -127,6 +129,7 @@ def test_start_command(monkeypatch):
     assert calls["tcp_host"] == "127.0.0.1"
     assert calls["tcp_port_requested"] == 0
     assert calls["tcp_execution_engine"] is calls["execution_engine"]
+    assert calls["tcp_ssl_context"] is None
 
     assert protocol.tcp_endpoint == ("127.0.0.1", 9002)
     assert transport.closed
