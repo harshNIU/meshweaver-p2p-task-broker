@@ -1,3 +1,5 @@
+"""TCP networking for task messages, authentication, and TLS transport."""
+
 import asyncio
 import json
 import ssl

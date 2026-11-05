@@ -1,4 +1,3 @@
-
 """Ed25519 key generation, secure storage, and loading."""
 
 from pathlib import Path
