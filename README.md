@@ -1,4 +1,4 @@
-# MeshWeaver — P2P Task Broker
+py# MeshWeaver — P2P Task Broker
 
 MeshWeaver is a collaborative Python project exploring peer-to-peer communication, distributed task execution, node discovery, routing, and fault-tolerant coordination.
 
