@@ -153,6 +153,11 @@ def start(
     ),
     web: bool = typer.Option(False, "--web", help="Start the web dashboard."),
     web_port: int = typer.Option(8765, help="Dashboard HTTP port."),
+    rich_dashboard: bool = typer.Option(
+        False,
+        "--dashboard",
+        help="Start the live Rich dashboard.",
+    ),
 ):
     """Start a UDP node and optionally its dashboard."""
     _validate_port(port, "port")
@@ -203,9 +208,11 @@ def start(
             typer.echo(f"MeshWeaver node running at {host}:{port}")
             typer.echo(f"TCP server listening at {host}:{tcp_port}")
 
+            if web or rich_dashboard:
+                from web.snapshot import build_snapshot
+
             if web:
                 from web.server import create_dashboard_server
-                from web.snapshot import build_snapshot
 
                 def submit_demo(payload):
                     """Validate and queue an allowlisted dashboard demo task."""
@@ -259,7 +266,21 @@ def start(
                 typer.echo(f"Submission token: {dashboard.submit_token}")
                 typer.echo("Use the token in the X-Token header for POST /api/submit.")
 
-            await asyncio.Event().wait()
+            if rich_dashboard:
+                from cli.dashboard import run_live_dashboard
+
+                await run_live_dashboard(
+                    snapshot_provider=lambda: build_snapshot(
+                        protocol=protocol,
+                        transport=transport,
+                        node_id=node_id or f"node-{port}",
+                        host=host,
+                        port=port,
+                        task_registry=engine.task_registry,
+                    )
+                )
+            else:
+                await asyncio.Event().wait()
 
         finally:
             if dashboard is not None:
