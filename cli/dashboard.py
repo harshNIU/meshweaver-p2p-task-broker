@@ -77,22 +77,30 @@ def create_dashboard(snapshot: dict | None = None) -> Layout:
     task_table.add_column("Task ID", style="cyan")
     task_table.add_column("Task Name")
     task_table.add_column("Assigned Node")
-    task_table.add_column("Status")
+    task_table.add_column("State")
+    task_table.add_column("Retries", justify="right")
 
     tasks = snapshot.get("tasks", [])
     if tasks:
         for task in tasks:
+            try:
+                attempts = int(task.get("attempts", 0) or 0)
+            except (TypeError, ValueError):
+                attempts = 0
+
+            retries = max(0, attempts - 1)
+
             task_table.add_row(
                 str(task.get("task_id", "N/A")),
                 str(task.get("name", task.get("task_name", "N/A"))),
                 str(task.get("node") or "Unassigned"),
                 str(task.get("state", "UNKNOWN")).upper(),
+                str(retries),
             )
     else:
-        task_table.add_row("No tasks", "-", "-", "-")
+        task_table.add_row("No tasks", "-", "-", "-", "-")
 
     layout["tasks"].update(Panel(task_table, title="Task Overview"))
-
     return layout
 
 

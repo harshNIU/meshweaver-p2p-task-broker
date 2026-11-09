@@ -74,3 +74,37 @@ def test_percentage_handles_invalid_values():
     assert _percentage(25.5) == "25.5%"
     assert _percentage(None) == "N/A"
     assert _percentage("invalid") == "N/A"
+
+
+def test_dashboard_displays_task_state_and_retry_count():
+    snapshot = {
+        "self": "node-1",
+        "nodes": [],
+        "tasks": [
+            {
+                "task_id": "task-retried",
+                "name": "add",
+                "node": "node-1",
+                "state": "RUNNING",
+                "attempts": 3,
+            },
+            {
+                "task_id": "task-new",
+                "name": "multiply",
+                "node": "node-2",
+                "state": "PENDING",
+                "attempts": 1,
+            },
+        ],
+    }
+
+    output = render_dashboard(snapshot)
+
+    assert "State" in output
+    assert "Retries" in output
+    assert "RUNNING" in output
+    assert "PENDING" in output
+    assert "task-retried" in output
+    assert "task-new" in output
+    assert "2" in output
+    assert "0" in output

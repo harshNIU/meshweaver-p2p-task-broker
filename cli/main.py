@@ -299,7 +299,7 @@ def start(
                     snapshot_provider=lambda: build_snapshot(
                         protocol=protocol,
                         transport=transport,
-                        node_id=node_id or f"node-{port}",
+                        node_id=local_node_id,
                         host=host,
                         port=port,
                         task_registry=engine.task_registry,
