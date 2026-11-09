@@ -198,6 +198,7 @@ def start(
         protocol = None
         tcp_server = None
         dashboard = None
+        task_submitter = None
 
         try:
             local_node_id = node_id or f"node-{port}"
@@ -442,7 +443,6 @@ def submit(
                 task_id,
                 timeout,
             )
-
         finally:
             transport.close()
 
