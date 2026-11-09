@@ -1,10 +1,12 @@
-"""Configure a compatible asyncio event loop for Windows tests."""
+"""Configure the test environment."""
 
-import asyncio
-import sys
+import os
 
 
 def pytest_configure(config):
-    """Use the Selector event loop on Windows for the test process."""
-    if sys.platform == "win32":
-        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+    """Configure test-only settings before tests execute."""
+
+    os.environ.setdefault(
+        "MESHWEAVER_SHARED_SECRET",
+        "meshweaver-pytest-only-secret-2026-secure",
+    )

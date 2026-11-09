@@ -22,10 +22,14 @@ from net.messages import (
 )
 from net.peer_manager import PeerConnectionManager
 from net.tcp_node import send_tcp_message
+from security.message_signing import (
+    MessageAuthenticationError,
+    sign_message,
+    verify_message,
+)
 
 MAX_CACHED_TASK_RESULTS = 1000
 MAX_SEEN_MESSAGES = 10000
-# Conservative UDP payload threshold to avoid IP fragmentation.
 MAX_UDP_MESSAGE_SIZE = 1200
 HEARTBEAT_INTERVAL_SECONDS = 5.0
 VALID_NODE_STATES = {"ALIVE", "SUSPECT", "DEAD"}
@@ -41,6 +45,7 @@ class UDPProtocol(asyncio.DatagramProtocol):
         node_id="node",
         peer_manager=None,
         execution_engine=None,
+        secret=None,
         send_queue_size=DEFAULT_SEND_QUEUE_SIZE,
         send_rate_limit=DEFAULT_SEND_RATE_LIMIT,
     ):
@@ -59,6 +64,7 @@ class UDPProtocol(asyncio.DatagramProtocol):
 
         self.transport = None
         self.node_id = node_id
+        self.secret = secret
         self.execution_engine = (
             execution_engine if execution_engine is not None else ExecutionEngine()
         )
@@ -84,6 +90,22 @@ class UDPProtocol(asyncio.DatagramProtocol):
         self.node_registry = {}
         self.tcp_host = None
         self.tcp_port = None
+
+    def _verify_task_message(self, message):
+        """Verify a task message before processing it."""
+        try:
+            verify_message(message, self.secret)
+            return True
+        except (MessageAuthenticationError, TypeError, ValueError):
+            return False
+
+    def _sign_task_message(self, message):
+        """Sign an outgoing task message."""
+        try:
+            sign_message(message, self.secret)
+            return True
+        except (MessageAuthenticationError, TypeError, ValueError):
+            return False
 
     def connection_made(self, transport):
         """Store the UDP transport and start background peer cleanup."""
@@ -252,6 +274,17 @@ class UDPProtocol(asyncio.DatagramProtocol):
             print(f"Received {text_message!r} from {addr}")
             return
 
+        # Authenticate task traffic before peer tracking, deduplication,
+        # caching, or any task-related processing.
+        if message.type in {
+            TASK_REQUEST,
+            TASK_RESULT,
+        } and not self._verify_task_message(message):
+            print(
+                f"Rejected unauthenticated {message.type} " f"from {message.sender_id}"
+            )
+            return
+
         message_key = (message.sender_id, message.seq)
 
         # Any valid structured packet proves the peer is currently reachable.
@@ -365,7 +398,7 @@ class UDPProtocol(asyncio.DatagramProtocol):
         if cpu < 0 or ram < 0 or last_seen < 0:
             return None
 
-        # FIX: Reject non-string states before checking set membership.
+        # Reject non-string states before checking set membership.
         if not isinstance(state, str) or state not in VALID_NODE_STATES:
             return None
 
@@ -439,13 +472,7 @@ class UDPProtocol(asyncio.DatagramProtocol):
         if cached is None:
             return
 
-        reply = Message(
-            type=TASK_RESULT,
-            sender_id=self.node_id,
-            seq=message.seq,
-            payload=cached,
-        )
-        self.send_message(reply, addr)
+        self._send_task_result(message, addr, cached)
 
     def _handle_task_request(self, message, addr):
         """Execute a valid task request and return its result."""
@@ -506,13 +533,18 @@ class UDPProtocol(asyncio.DatagramProtocol):
         }
 
     def _send_task_result(self, request, addr, payload):
-        """Send a task result to the requester."""
+        """Sign and send a task result to the requester."""
         reply = Message(
             type=TASK_RESULT,
             sender_id=self.node_id,
             seq=request.seq,
             payload=payload,
         )
+
+        if not self._sign_task_message(reply):
+            print("Could not sign UDP task result; response discarded")
+            return
+
         self.send_message(reply, addr)
 
     def error_received(self, exc):
@@ -570,6 +602,7 @@ class UDPProtocol(asyncio.DatagramProtocol):
                 tcp_address[0],
                 tcp_address[1],
                 message,
+                secret=self.secret,
             )
             self.received_envelopes.append((response, udp_address))
         except (OSError, ConnectionError, ValueError, TimeoutError) as exc:
@@ -625,6 +658,7 @@ async def start_udp_node(
     node_id="node",
     peer_manager=None,
     execution_engine=None,
+    secret=None,
     send_queue_size=DEFAULT_SEND_QUEUE_SIZE,
     send_rate_limit=DEFAULT_SEND_RATE_LIMIT,
 ):
@@ -636,6 +670,7 @@ async def start_udp_node(
             node_id=node_id,
             peer_manager=peer_manager,
             execution_engine=execution_engine,
+            secret=secret,
             send_queue_size=send_queue_size,
             send_rate_limit=send_rate_limit,
         ),

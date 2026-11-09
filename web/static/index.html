@@ -276,9 +276,9 @@ function renderTasks(tasks) {
     tr.append(
       cell(t.task_id),
       cell(t.name),
-      cell(t.assigned_to),
-      cell(t.attempt),
-      statusCell(t.status)
+      cell(t.node),
+      cell(t.attempts),
+      statusCell(t.state)
     );
     el.taskRows.appendChild(tr);
   }

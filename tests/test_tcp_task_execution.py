@@ -8,12 +8,15 @@ from execution.serializer import task_to_dict
 from net.messages import TASK_REQUEST, TASK_RESULT, Message
 from net.tcp_node import send_tcp_message, start_tcp_server
 
+TEST_SECRET = b"meshweaver-test-secret-32-bytes!!"
+
 
 class TestTCPTaskExecution(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.engine = ExecutionEngine(max_workers=2)
         self.server, self.received_messages = await start_tcp_server(
-            execution_engine=self.engine
+            execution_engine=self.engine,
+            secret=TEST_SECRET,
         )
         self.host, self.port = self.server.sockets[0].getsockname()[:2]
 
@@ -35,7 +38,10 @@ class TestTCPTaskExecution(unittest.IsolatedAsyncioTestCase):
         task = Task(task_name="add", args=(10, 15))
 
         response = await send_tcp_message(
-            self.host, self.port, self.make_request(task, 1)
+            self.host,
+            self.port,
+            self.make_request(task, 1),
+            secret=TEST_SECRET,
         )
 
         self.assertEqual(response.type, TASK_RESULT)
@@ -50,7 +56,10 @@ class TestTCPTaskExecution(unittest.IsolatedAsyncioTestCase):
         task = Task(task_name="not_registered")
 
         response = await send_tcp_message(
-            self.host, self.port, self.make_request(task, 2)
+            self.host,
+            self.port,
+            self.make_request(task, 2),
+            secret=TEST_SECRET,
         )
 
         self.assertEqual(response.type, TASK_RESULT)
@@ -66,7 +75,9 @@ class TestTCPTaskExecution(unittest.IsolatedAsyncioTestCase):
             payload={"task": {"task_name": "add"}},
         )
 
-        response = await send_tcp_message(self.host, self.port, message)
+        response = await send_tcp_message(
+            self.host, self.port, message, secret=TEST_SECRET
+        )
 
         self.assertEqual(response.type, TASK_RESULT)
         self.assertEqual(response.seq, 3)
@@ -81,7 +92,9 @@ class TestTCPTaskExecution(unittest.IsolatedAsyncioTestCase):
             payload={},
         )
 
-        response = await send_tcp_message(self.host, self.port, message)
+        response = await send_tcp_message(
+            self.host, self.port, message, secret=TEST_SECRET
+        )
 
         self.assertEqual(response.type, TASK_RESULT)
         self.assertEqual(response.seq, 4)
@@ -96,7 +109,10 @@ class TestTCPTaskExecution(unittest.IsolatedAsyncioTestCase):
         task = Task(task_name="fail")
 
         response = await send_tcp_message(
-            self.host, self.port, self.make_request(task, 5)
+            self.host,
+            self.port,
+            self.make_request(task, 5),
+            secret=TEST_SECRET,
         )
 
         self.assertEqual(response.type, TASK_RESULT)
@@ -114,10 +130,16 @@ class TestTCPTaskExecution(unittest.IsolatedAsyncioTestCase):
         task = Task(task_name="count", task_id="duplicate-network-task")
 
         first_response = await send_tcp_message(
-            self.host, self.port, self.make_request(task, 6)
+            self.host,
+            self.port,
+            self.make_request(task, 6),
+            secret=TEST_SECRET,
         )
         second_response = await send_tcp_message(
-            self.host, self.port, self.make_request(task, 7)
+            self.host,
+            self.port,
+            self.make_request(task, 7),
+            secret=TEST_SECRET,
         )
 
         self.assertEqual(first_response.type, TASK_RESULT)
