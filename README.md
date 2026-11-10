@@ -1,48 +1,123 @@
 # MeshWeaver — P2P Task Broker
 
-MeshWeaver is a collaborative Python project exploring peer-to-peer communication, distributed task execution, node discovery, routing, and fault-tolerant coordination.
+**MeshWeaver** is a Python-based peer-to-peer (P2P) task broker designed to support communication between distributed nodes, peer discovery, task routing, asynchronous task execution, and fault-tolerant coordination.
 
-This branch, `Shrinidhi-async-network`, focuses on UDP networking, structured messages, peer discovery, PING/PONG heartbeats, peer timeout management, a four-node local launcher, and CLI-based task submission.
+Instead of depending entirely on a central broker, MeshWeaver allows nodes to communicate and coordinate through networking protocols and distributed components.
 
-> **Implementation note:** The project contains additional team-developed DHT, routing, gossip, metrics, and security components. Their exact integration status should be assessed from the relevant module implementations and team review documentation.
+This branch, `Shrinidhi-async-network`, focuses on asynchronous networking, UDP and TCP communication, peer management, heartbeat monitoring, task communication, and networking security.
+
+---
 
 ## Features
 
-### Networking
-- Asynchronous UDP node communication using Python's `asyncio`.
+### 1. Asynchronous Networking
+- UDP-based peer-to-peer communication using Python `asyncio`.
+- TCP communication for reliable message delivery.
 - Structured JSON message envelopes.
-- PING/PONG communication and peer discovery.
-- Periodic heartbeat messages for peer liveness.
+- PING/PONG communication.
+- Automatic peer discovery and peer-list exchange.
+- Periodic heartbeat monitoring.
 - Peer activity tracking and timeout cleanup.
-- Handling of malformed peer-state records.
+- Asynchronous outgoing message queue.
+- Large UDP message forwarding through TCP.
 
-### Task execution
-- Built-in `add` and `multiply` demo tasks.
-- CLI-based task submission to a running node.
-- UDP task requests and task-result responses.
-- Task result and failure reporting.
+### 2. Peer Management and Discovery
+- Peer information management.
+- Node registry and peer tracking.
+- ALIVE, SUSPECT, and DEAD peer states.
+- Periodic heartbeat messages.
+- Detection and cleanup of expired peers.
+- Multi-node network communication.
 
-### Local development tools
-- PowerShell script for launching four local nodes.
-- Web dashboard for observing the live runtime.
-- Automated tests for networking, peer management, discovery, routing, and task-related behavior.
+### 3. Task Communication and Execution
+- Task request and assignment messages.
+- Task result and acknowledgement handling.
+- Request-response communication.
+- Correlation IDs for matching responses with requests.
+- Request timeout handling.
+- Task execution and result reporting.
+- Retry and failover support through the task execution workflow.
 
-### Technologies
-- Python
-- `asyncio` and UDP sockets
-- JSON
-- Typer CLI
-- `psutil` for resource metrics
-- `unittest` and pytest-compatible testing
-- Git and GitHub
+### 4. Distributed Hash Table (DHT)
+- Multi-node DHT network audit.
+- Distributed data replication.
+- Remote value retrieval.
+- Peer connectivity validation.
 
-## Prerequisites
+### 5. Networking Security
+- Shared-secret message authentication.
+- Message signing and verification support.
+- Optional TLS support for TCP connections.
+- Authenticated task communication.
+- Correlation ID validation.
 
-- Git
-- Python installed and accessible through `python`
-- Windows PowerShell for the supplied four-node launcher
+### 6. Web Dashboard and Development Tools
+- Optional browser-based dashboard.
+- Runtime state monitoring.
+- Four-node local launcher.
+- CLI-based task submission.
+- Automated tests for networking and other project components.
 
-The development environment used for validation included Python 3.14.8.
+---
+
+## Technologies Used
+
+| Technology | Purpose |
+|---|---|
+| Python 3.14 | Main programming language |
+| asyncio | Asynchronous programming |
+| UDP | Peer communication and discovery |
+| TCP | Reliable message transport |
+| JSON | Message serialization |
+| SSL/TLS | Optional secure TCP connections |
+| Typer | Command-line interface |
+| pytest | Automated testing |
+| unittest | Unit and asynchronous tests |
+| Git and GitHub | Version control and collaboration |
+
+---
+
+## Project Architecture
+
+MeshWeaver consists of several major components:
+
+1. **CLI:** Starts the application and accepts commands and configuration.
+2. **Networking:** Handles UDP and TCP communication between nodes.
+3. **Peer Management:** Maintains peer information and heartbeat status.
+4. **DHT:** Supports distributed data storage and retrieval.
+5. **Task Routing:** Coordinates task selection and distribution.
+6. **Execution Engine:** Handles task execution and lifecycle tracking.
+7. **Task Registry:** Maintains registered tasks and task information.
+8. **Web Dashboard:** Provides a browser-based view of runtime information.
+9. **Tests:** Verifies networking, routing, execution, and integration behaviour.
+
+### Simplified Architecture
+
+```text
+                 MeshWeaver P2P Network
+                          |
+             +------------+------------+
+             |                         |
+         Node A                      Node B
+             |                         |
+       UDP Communication <----------> UDP
+       TCP Communication <----------> TCP
+             |                         |
+       Peer Discovery              Peer Discovery
+       Heartbeat                   Heartbeat
+             |                         |
+             +------------+------------+
+                          |
+                    Task Routing
+                          |
+                   Task Execution
+                          |
+                    Task Results
+
+                 Optional Web Dashboard
+```
+
+---
 
 ## Installation
 
@@ -59,230 +134,369 @@ cd meshweaver-p2p-task-broker
 python -m venv .venv
 ```
 
-Activate it:
+### 3. Activate the virtual environment
 
 ```powershell
 .\.venv\Scripts\Activate.ps1
 ```
 
-If PowerShell blocks environment activation, use the virtual environment's Python executable directly rather than changing the machine's execution policy.
-
-### 3. Install dependencies
+### 4. Install dependencies
 
 ```powershell
 python -m pip install -r requirements.txt
 ```
 
-## Run the Four-Node Demonstration
+---
 
-The repository includes `start_four_nodes.ps1`, which starts four local nodes on UDP ports 8000–8003. The launcher registers the built-in demo tasks and starts the web dashboard on port 8765.
+## Running the Four-Node Dashboard Demo
 
-### 1. Start the nodes
+The repository includes a PowerShell launcher for starting four local nodes and the optional web dashboard.
 
-From the project root, in PowerShell:
+From the project root, run:
 
 ```powershell
 .\start_four_nodes.ps1
 ```
 
-Expected startup messages include:
+The documented configuration uses UDP ports `8000–8003` and dashboard port `8765`.
+
+Open the dashboard in a browser on the same computer:
 
 ```text
-Starting node-8000...
-Starting node-8001...
-Starting node-8002...
-Starting node-8003...
-
-All four nodes started.
-Dashboard: http://127.0.0.1:8765/
-Demo tasks: add, multiply
+http://127.0.0.1:8765/
 ```
 
-Keep this terminal open while running the demo.
+Keep the launcher terminal open while using the dashboard.
 
-### 2. Open the dashboard
+### Submitting Demo Tasks
 
-Visit:
+Open a second PowerShell terminal in the project directory and activate the virtual environment.
 
-http://127.0.0.1:8765/
-
-The dashboard provides a live view of the running network and its available runtime information.
-
-Observed-node counts can temporarily include client nodes created during task submission. They should not automatically be interpreted as the number of long-running worker processes.
-
-### 3. Submit an addition task
-
-Open a **second PowerShell terminal** in the project directory and activate the virtual environment if necessary.
-
-Run:
+**Addition:**
 
 ```powershell
 python -m cli.main submit add --args "[2,3]" --host 127.0.0.1 --port 8000 --timeout 10
 ```
 
-Expected successful result:
+Expected calculation:
 
 ```text
-Submitted task 'add'
-Received TASK_RESULT from node-8000
-Status: completed
-Result: 5
+2 + 3 = 5
 ```
 
-### 4. Submit a multiplication task
+**Multiplication:**
 
 ```powershell
 python -m cli.main submit multiply --args "[4,5]" --host 127.0.0.1 --port 8000 --timeout 10
 ```
 
-Expected successful result:
+Expected calculation:
 
 ```text
-Submitted task 'multiply'
-Received TASK_RESULT from node-8000
-Status: completed
-Result: 20
+4 * 5 = 20
 ```
 
-The commands and results above were verified during local development.
+The dashboard is an optional runtime interface. Its local task submission callback should not be confused with proof of remote distributed task execution.
 
-### 5. Stop the nodes
+### Stopping the Demo
 
-Return to the terminal running `start_four_nodes.ps1` and press:
+Return to the launcher terminal and press:
 
 ```text
-Ctrl+C
+Ctrl + C
 ```
 
-The launcher attempts to stop the node processes it started.
+---
 
-## Run the Tests
+## Networking Demonstration
 
-With the virtual environment activated, run the project's test suite:
+### 1. Ten-Node DHT Network Audit
+
+Run:
 
 ```powershell
-python -m unittest discover -s tests -v
+python -m scripts.spawn_nodes --nodes 10 --base-port 9000
 ```
 
-**Recorded validation result:** 89 tests ran successfully, with `OK`.
+Latest recorded live result:
 
-The test suite covers networking, PING/PONG exchange, peer discovery, timeout handling, malformed messages, task-result handling, and other repository components.
+| Metric | Result |
+|---|---:|
+| Status | PASS |
+| Independent UDP processes | 10 |
+| Ports | 9000–9009 |
+| Peers discovered per node | 9 |
+| DHT replicas | 10 |
+| Remote value retrieval | Successful |
+| Execution time | 8.916 seconds |
+| Node shutdown | All 10 stopped cleanly |
 
-Run the tests again after future code changes; a previous successful test run does not guarantee that later changes are correct.
+### 2. Task Execution and Worker Failure Recovery
 
-The repository also supports pytest-based workflows where configured:
+Run:
 
 ```powershell
-python -m pytest -q
+pytest -v tests/test_smoke_5nodes.py
 ```
 
-## Command Reference
+The test starts five independent worker processes and submits 20 slow-square tasks.
 
-| Purpose | Command |
+During execution, two workers are terminated to simulate worker failures.
+
+**Latest recorded result:**
+
+- Five worker processes started.
+- Twenty tasks submitted.
+- Two workers terminated during execution.
+- Remaining workers handled recovery through retry and failover.
+- All 20 tasks completed successfully.
+- Returned results matched the expected square values.
+
+```text
+1 passed in 5.85s
+```
+
+These are separate demonstrations: the 10-node DHT audit and the five-worker task recovery test.
+
+---
+
+## Running the Complete Test Suite
+
+Activate the virtual environment and run:
+
+```powershell
+pytest -q
+```
+
+### Latest Full Test Result
+
+```text
+313 passed in 25.51s
+```
+
+<details>
+<summary>Validation summary</summary>
+
+| Test / Demonstration | Result |
 |---|---|
-| Start four local nodes and dashboard | `.\start_four_nodes.ps1` |
-| Open dashboard | `http://127.0.0.1:8765/` |
-| Submit addition | `python -m cli.main submit add --args "[2,3]" --host 127.0.0.1 --port 8000 --timeout 10` |
-| Submit multiplication | `python -m cli.main submit multiply --args "[4,5]" --host 127.0.0.1 --port 8000 --timeout 10` |
-| Run unit tests | `python -m unittest discover -s tests -v` |
-| View CLI help | `python -m cli.main --help` |
-| Stop local nodes | Press `Ctrl+C` in the launcher terminal |
+| Complete automated test suite | 313 passed |
+| Ten-node DHT network audit | PASS |
+| All-to-all peer discovery | PASS |
+| DHT replication | PASS |
+| Remote value retrieval | PASS |
+| Twenty-task execution | PASS |
+| Recovery after two worker failures | PASS |
+| Pytest warnings in latest run | None |
+
+</details>
+
+---
+
+## Networking Implementation Details
+
+### UDP Communication
+
+Implemented in `net/udp_node.py`.
+
+The UDP networking module uses Python's `asyncio.DatagramProtocol`.
+
+Main responsibilities:
+- Sending and receiving UDP messages.
+- Processing PING and PONG messages.
+- Sharing peer information.
+- Maintaining peer records.
+- Handling incoming task requests.
+- Managing outgoing messages through an asynchronous queue.
+- Forwarding large messages through TCP.
+
+### TCP Communication
+
+Implemented in `net/tcp_node.py`.
+
+Main responsibilities:
+- TCP stream communication.
+- Newline-delimited JSON messages.
+- Task request and assignment handling.
+- Task result and acknowledgement handling.
+- Request timeouts.
+- Correlation ID management.
+- Authenticated message verification.
+
+### Peer Heartbeat
+
+The configured heartbeat interval is five seconds.
+
+Heartbeat messages help identify active peers. Expired peer records are removed through the cleanup mechanism.
+
+### Networking Security
+
+The networking implementation supports:
+- Shared-secret message authentication.
+- Message signing and verification.
+- Optional TLS connections.
+- Request-response correlation validation.
+
+---
 
 ## Repository Structure
 
 ```text
 meshweaver-p2p-task-broker/
+│
 ├── cli/
 │   └── main.py
+│
+├── dht/
+│   ├── ids.py
+│   ├── lookup.py
+│   ├── node.py
+│   ├── routing_table.py
+│   ├── rpc.py
+│   └── store.py
+│
 ├── docs/
-│   ├── member2_review.md
-│   ├── network_audit.md
+│   ├── architecture.md
+│   ├── demo_run.md
 │   ├── networking.md
-│   └── setup.md
+│   ├── network_audit.md
+│   ├── setup.md
+│   ├── tasks.md
+│   └── usage.md
+│
 ├── execution/
 ├── gossip/
+│
 ├── net/
-│   ├── bootstrap.py
 │   ├── messages.py
 │   ├── peer_manager.py
+│   ├── tcp_node.py
 │   └── udp_node.py
+│
 ├── routing/
 ├── security/
+├── tasks/
 ├── tests/
 ├── web/
-├── start_four_nodes.ps1
+│
+├── conftest.py
+├── pytest.ini
 ├── requirements.txt
+├── start_four_nodes.ps1
 └── README.md
 ```
 
-This is an illustrative overview, not a guaranteed exhaustive tree. Actual files may differ between branches.
+This is an overview of the project structure; actual files may vary between branches.
+
+---
 
 ## Team Contributions
 
-### Member 1 — Networking
+MeshWeaver is a collaborative project. Different members contribute to networking, task routing, execution, dashboard development, and other system components.
 
-Networking work in `Shrinidhi-async-network` includes:
+### Member 1 — Async Networking and Security
 
-- UDP node communication.
-- Structured message envelopes.
-- PING/PONG exchange.
-- Peer activity and timeout tracking.
-- Heartbeat support.
-- Peer discovery validation.
-- Four-node local launcher.
-- Networking and peer-management tests.
+My contribution focuses on the networking module.
 
-### Collaborative work
+Work includes:
 
-The repository includes additional team-developed functionality for DHT discovery, routing, task execution, gossip, metrics, and other components. Credit each contribution according to the actual work completed and the team's agreed responsibilities.
+- UDP peer communication.
+- TCP message transport.
+- Structured message handling.
+- PING/PONG communication.
+- Peer discovery and peer-list exchange.
+- Heartbeat monitoring.
+- Peer timeout management and cleanup.
+- Asynchronous message queue.
+- Task request and response communication.
+- Correlation IDs and request timeouts.
+- Shared-secret authentication and TLS support.
+- Networking testing and documentation.
 
-For the DHT and routing review, consult `docs/member2_review.md` and `docs/network_audit.md` when those files are present in the checked-out branch.
+### Collaborative Project Work
 
-## Limitations and Security Notes
+The complete repository also contains DHT, routing, task execution, gossip, metrics, and dashboard components developed collaboratively by the team.
 
-- The four-node demonstration runs locally on one machine; it is not by itself proof of deployment across multiple computers.
-- The dashboard's displayed topology should be interpreted according to the actual runtime data and dashboard implementation.
-- CPU and RAM measurements can vary between runs.
-- A message field reserved for a signature does not, by itself, provide cryptographic signing or verification.
-- Do not assume encryption, authentication, or production-grade security without corresponding implementation and tests.
-- The successful `add` and `multiply` demonstrations establish those specific task workflows, not every possible distributed workload or failure scenario.
+Individual contributions should be credited according to the actual work completed by each member.
+
+---
+
+## Limitations and Notes
+
+- The four-node launcher is a local demonstration, not proof of deployment across multiple physical computers.
+- DHT and worker-recovery demonstrations are separate tests.
+- Dashboard state reporting does not automatically prove remote task execution.
+- Network timing and resource measurements may vary between runs.
+- Optional TLS support requires appropriate SSL configuration.
+- The project is intended as an academic and development project; production deployment requires additional operational and security validation.
+
+---
 
 ## Development Workflow
 
-Before committing changes, check the working tree:
+Check the current branch and working tree:
+
+```powershell
 git status
+```
 
+Run the complete test suite:
 
-Run the test suite:
-python -m unittest discover -s tests -v
+```powershell
+pytest -q
+```
 
-Review whitespace errors:
+Check whitespace errors:
 
-
+```powershell
 git diff --check
+```
 
+Stage the README change:
 
-Stage only the intended files:
-
-
-git add README.md start_four_nodes.ps1
-
+```powershell
+git add README.md
+```
 
 Commit:
-git commit -m "docs: document local task execution workflow"
 
+```powershell
+git commit -m "docs: update MeshWeaver project README"
+```
 
 Push your branch:
+
+```powershell
 git push origin Shrinidhi-async-network
+```
 
+---
 
-If the branch has already been merged into `main`, merge or cherry-pick subsequent changes through your team's normal workflow. A new commit on the feature branch does not automatically update `main`.
+## Documentation
 
+Additional project documentation is available in the `docs/` directory:
+
+- `architecture.md` — system architecture.
+- `networking.md` — networking module and Member 1 contribution.
+- `demo_run.md` — final demonstration results.
+- `network_audit.md` — network audit information.
+- `setup.md` — development setup.
+- `tasks.md` — task-related documentation.
+- `usage.md` — usage instructions.
+
+---
 
 ## License
 
-Add the license selected by the project maintainers. Do not claim a license until the team has confirmed and included it.
+Add the license selected and approved by the project maintainers.
 
-## Contributing
+---
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for project setup, testing, code quality checks, branch workflow, and pull request guidelines.
+## Acknowledgement
+
+This project was developed collaboratively as part of an internship project.
+
+Through MeshWeaver, I gained practical experience with Python asynchronous programming, UDP and TCP communication, peer-to-peer networking, distributed systems, task execution, failure recovery, testing, debugging, and collaborative Git workflows.
+
+**Project:** MeshWeaver — P2P Task Broker
+**Branch:** `Shrinidhi-async-network`
+**Role:** Member 1 — Async Networking and Security
