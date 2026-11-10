@@ -159,6 +159,11 @@ def start(
     ),
     web: bool = typer.Option(False, "--web", help="Start the web dashboard."),
     web_port: int = typer.Option(8765, help="Dashboard HTTP port."),
+    rich_dashboard: bool = typer.Option(
+        False,
+        "--dashboard",
+        help="Start the live Rich dashboard.",
+    ),
     tls_cert: str | None = typer.Option(
         None,
         "--tls-cert",
@@ -193,6 +198,7 @@ def start(
         protocol = None
         tcp_server = None
         dashboard = None
+        task_submitter = None
 
         try:
             local_node_id = node_id or f"node-{port}"
@@ -236,6 +242,9 @@ def start(
 
             typer.echo(f"MeshWeaver node running at {host}:{port}")
             typer.echo(f"TCP server listening at {host}:{tcp_port}")
+
+            if web or rich_dashboard:
+                from web.snapshot import build_snapshot
 
             if web:
                 from security.message_signing import (
@@ -283,6 +292,21 @@ def start(
                 typer.echo(f"Submission token: {dashboard.submit_token}")
                 typer.echo("Use the token in the X-Token header for POST /api/submit.")
 
+            if rich_dashboard:
+                from cli.dashboard import run_live_dashboard
+
+                await run_live_dashboard(
+                    snapshot_provider=lambda: build_snapshot(
+                        protocol=protocol,
+                        transport=transport,
+                        node_id=local_node_id,
+                        host=host,
+                        port=port,
+                        task_registry=engine.task_registry,
+                    )
+                )
+            else:
+                await asyncio.Event().wait()
                 if task_submitter is None:
                     typer.echo("Dashboard is running in read-only mode.")
                 else:
@@ -419,7 +443,6 @@ def submit(
                 task_id,
                 timeout,
             )
-
         finally:
             transport.close()
 
