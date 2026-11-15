@@ -85,7 +85,27 @@ python -m ruff check .
 python -m black --check .
 ```
 
-## 7. Security and Limitations
+## 7. Network and Failover Checks
+
+Run the ten-node DHT network audit:
+
+```powershell
+python -m scripts.spawn_nodes --nodes 10 --base-port 0
+```
+
+This starts ten independent UDP nodes and checks peer discovery and replication. A successful audit reports `PASS`.
+
+Run the task routing and failover demonstration:
+
+```powershell
+python -m scripts.routing_demo
+```
+
+This verifies task execution and retry behavior when the original worker stops. A successful demonstration reports `PASS`.
+
+Run these checks from the repository root with the project dependencies installed.
+
+## 8. Security and Limitations
 
 The dashboard binds to the loopback address by default and is intended as an optional local interface. Keep the submission token private.
 
