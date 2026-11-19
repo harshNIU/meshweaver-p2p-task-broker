@@ -21,6 +21,10 @@ class TaskState(str, Enum):
     FAILED = "FAILED"
 
 
+class StaleTaskStateError(RuntimeError):
+    """Raised when persisted task state changed since it was loaded locally."""
+
+
 @dataclass
 class TaskRecord:
     """Public task fields shared with routing and dashboard components."""
@@ -63,15 +67,41 @@ class TaskLifecycle:
         """Return the persistence store used by this lifecycle tracker."""
         return self._store
 
-    def _persist(self, record: TaskRecord) -> None:
-        """Persist a lifecycle record when a store is configured."""
+    def _persist_new(self, record: TaskRecord) -> None:
+        """Insert a new record without overwriting an existing task."""
         if self._store is not None:
-            self._store.save(
+            self._store.insert_record(
                 record.task_id,
                 record.name,
                 record.state,
                 record.node,
                 record.attempts,
+            )
+
+    def _persist_transition(
+        self,
+        record: TaskRecord,
+        *,
+        expected_state: TaskState,
+        expected_node: str,
+        expected_attempts: int,
+    ) -> None:
+        """Persist a transition only if its expected prior version still exists."""
+        if self._store is None:
+            return
+
+        updated = self._store.compare_and_set_state(
+            task_id=record.task_id,
+            expected_state=expected_state,
+            expected_node=expected_node,
+            expected_attempts=expected_attempts,
+            new_state=record.state,
+            new_node=record.node,
+            new_attempts=record.attempts,
+        )
+        if not updated:
+            raise StaleTaskStateError(
+                f"Persisted state for task {record.task_id} changed concurrently"
             )
 
     def create(self, task_id: str, name: str) -> TaskRecord:
@@ -86,7 +116,7 @@ class TaskLifecycle:
                 raise ValueError(f"Task already exists: {task_id}")
 
             record = TaskRecord(task_id=task_id, name=name)
-            self._persist(record)
+            self._persist_new(record)
             self._tasks[task_id] = record
             return record
 
@@ -124,6 +154,42 @@ class TaskLifecycle:
             self._tasks[task_id] = record
             return record
 
+    def update_running_attempts(
+        self,
+        task_id: str,
+        attempts: int,
+    ) -> TaskRecord:
+        """Persist an updated retry count while the task remains RUNNING."""
+        if isinstance(attempts, bool) or not isinstance(attempts, int):
+            raise TypeError("attempts must be an integer")
+        if attempts < 0:
+            raise ValueError("attempts must be a non-negative integer")
+
+        with self._lock:
+            record = self._tasks.get(task_id)
+            if record is None:
+                raise KeyError(f"Unknown task: {task_id}")
+            if record.state != TaskState.RUNNING:
+                raise ValueError("Attempts can only be updated for running tasks")
+            if attempts <= record.attempts:
+                return record
+
+            old_attempts = record.attempts
+            record.attempts = attempts
+
+            try:
+                self._persist_transition(
+                    record,
+                    expected_state=TaskState.RUNNING,
+                    expected_node=record.node,
+                    expected_attempts=old_attempts,
+                )
+            except Exception:
+                record.attempts = old_attempts
+                raise
+
+            return record
+
     def transition(
         self,
         task_id: str,
@@ -131,7 +197,7 @@ class TaskLifecycle:
         *,
         node: str | None = None,
     ) -> TaskRecord:
-        """Move a task to a valid next state."""
+        """Move a task to a valid next state using an atomic persisted update."""
         if not isinstance(new_state, TaskState):
             raise TypeError("new_state must be a TaskState")
 
@@ -161,7 +227,12 @@ class TaskLifecycle:
             record.state = new_state
 
             try:
-                self._persist(record)
+                self._persist_transition(
+                    record,
+                    expected_state=old_state,
+                    expected_node=old_node,
+                    expected_attempts=old_attempts,
+                )
             except Exception:
                 record.state = old_state
                 record.node = old_node
@@ -195,11 +266,17 @@ class TaskLifecycle:
 
             old_node = record.node
             old_state = record.state
+            old_attempts = record.attempts
             record.node = new_node_id
             record.state = TaskState.ASSIGNED
 
             try:
-                self._persist(record)
+                self._persist_transition(
+                    record,
+                    expected_state=old_state,
+                    expected_node=old_node,
+                    expected_attempts=old_attempts,
+                )
             except Exception:
                 record.node = old_node
                 record.state = old_state
@@ -235,10 +312,17 @@ class TaskLifecycle:
                 raise ValueError("Task is not assigned to the current node")
 
             old_node = record.node
+            old_state = record.state
+            old_attempts = record.attempts
             record.node = new_node_id
 
             try:
-                self._persist(record)
+                self._persist_transition(
+                    record,
+                    expected_state=old_state,
+                    expected_node=old_node,
+                    expected_attempts=old_attempts,
+                )
             except Exception:
                 record.node = old_node
                 raise

@@ -1,3 +1,4 @@
+
 """Tests for remote task execution over TCP."""
 
 import unittest
@@ -6,9 +7,15 @@ from execution.engine import ExecutionEngine
 from execution.models import Task, TaskStatus
 from execution.serializer import task_to_dict
 from net.messages import TASK_REQUEST, TASK_RESULT, Message
-from net.tcp_node import send_tcp_message, start_tcp_server
+from net.tcp_node import (
+    send_callable_task,
+    send_tcp_message,
+    start_tcp_server,
+)
+from security.message_signing import MessageAuthenticationError
 
 TEST_SECRET = b"meshweaver-test-secret-32-bytes!!"
+WRONG_SECRET = b"another-test-secret-32-bytes!!!"
 
 
 class TestTCPTaskExecution(unittest.IsolatedAsyncioTestCase):
@@ -152,8 +159,98 @@ class TestTCPTaskExecution(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(second_response.payload["status"], TaskStatus.FAILED.value)
         self.assertIn("already exists", second_response.payload["error"])
 
-        # The duplicate request must not execute the function a second time.
         self.assertEqual(executions, ["executed"])
+
+    async def test_authenticated_remote_callable_executes_and_returns_result(self):
+        def multiply_and_add(a, b, bonus=0):
+            return a * b + bonus
+
+        task = Task(
+            task_name="multiply_and_add",
+            args=(10, 20),
+            kwargs={"bonus": 5},
+        )
+
+        result = await send_callable_task(
+            self.host,
+            self.port,
+            task,
+            multiply_and_add,
+            secret=TEST_SECRET,
+        )
+
+        self.assertEqual(result.task_id, task.task_id)
+        self.assertEqual(result.status, TaskStatus.COMPLETED)
+        self.assertEqual(result.value, 205)
+        self.assertEqual(result.attempts, 1)
+
+        self.assertTrue(
+            any(message.type == "TASK_SUBMIT" for message in self.received_messages)
+        )
+
+    async def test_remote_callable_exception_returns_failed_result(self):
+        def failing_callable():
+            raise RuntimeError("remote callable failed")
+
+        task = Task(task_name="failing_callable")
+
+        result = await send_callable_task(
+            self.host,
+            self.port,
+            task,
+            failing_callable,
+            secret=TEST_SECRET,
+        )
+
+        self.assertEqual(result.task_id, task.task_id)
+        self.assertEqual(result.status, TaskStatus.FAILED)
+        self.assertIn("remote callable failed", result.error)
+
+    async def test_remote_callable_rejects_wrong_authentication_secret(self):
+        executions = []
+
+        def should_not_execute():
+            executions.append(True)
+            return "executed"
+
+        task = Task(task_name="must_not_execute")
+
+        with self.assertRaises(MessageAuthenticationError):
+            await send_callable_task(
+                self.host,
+                self.port,
+                task,
+                should_not_execute,
+                secret=WRONG_SECRET,
+            )
+
+        self.assertEqual(executions, [])
+
+    async def test_malformed_callable_payload_returns_failure_result(self):
+        message = Message(
+            type="TASK_SUBMIT",
+            sender_id="node-client",
+            seq=10,
+            payload={
+                "task": {
+                    "task_id": "invalid-callable-task",
+                    "task_name": "invalid_callable",
+                    "max_retries": 0,
+                    "timeout_seconds": None,
+                },
+                "callable_payload": "not-valid-base64!!!",
+            },
+        )
+
+        response = await send_tcp_message(
+            self.host,
+            self.port,
+            message,
+            secret=TEST_SECRET,
+        )
+
+        self.assertEqual(response.type, TASK_RESULT)
+        self.assertEqual(response.payload["status"], TaskStatus.FAILED.value)
 
 
 if __name__ == "__main__":

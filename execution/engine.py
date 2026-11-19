@@ -241,6 +241,30 @@ class ExecutionEngine:
 
         return self._execute_reserved(task)
 
+    def execute_callable(
+        self,
+        task: Task,
+        function: Callable[..., Any],
+    ) -> TaskResult:
+        """Execute a supplied callable using the normal task lifecycle."""
+        if not callable(function):
+            raise TaskRegistrationError("Supplied task function must be callable.")
+
+        try:
+            self._reserve_task(task)
+        except ValueError as exc:
+            if "Task ID already exists" not in str(exc):
+                raise
+
+            return TaskResult(
+                task_id=task.task_id,
+                status=TaskStatus.FAILED,
+                attempts=0,
+                error=f"Task ID already exists: {task.task_id}",
+            )
+
+        return self._execute_reserved(task, function_override=function)
+
     def submit_task(self, task: Task) -> Future[TaskResult]:
         """Submit a task in the background and return its Future."""
         self._reserve_task(task)
@@ -287,10 +311,18 @@ class ExecutionEngine:
         )
         self._store_result(result)
 
-    def _execute_reserved(self, task: Task) -> TaskResult:
-        """Execute a task whose ID has already been reserved."""
+    def _execute_reserved(
+        self,
+        task: Task,
+        function_override: Callable[..., Any] | None = None,
+    ) -> TaskResult:
+        """Execute a reserved task using a registered or supplied callable."""
         with self._state_lock:
-            function = self._registry.get(task.task_name)
+            function = (
+                function_override
+                if function_override is not None
+                else self._registry.get(task.task_name)
+            )
             cancel_event = self._cancel_events.get(task.task_id)
 
             if cancel_event is None:

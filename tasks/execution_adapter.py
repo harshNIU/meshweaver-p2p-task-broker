@@ -1,4 +1,4 @@
-﻿"""Bridge task execution results into the dashboard lifecycle contract."""
+"""Bridge task execution results into the dashboard lifecycle contract."""
 
 from concurrent.futures import Future, ThreadPoolExecutor
 from threading import RLock
@@ -64,12 +64,10 @@ class LifecycleExecutionAdapter:
             self.lifecycle.transition(task.task_id, TaskState.FAILED)
             raise
 
-        record = self.lifecycle.get(task.task_id)
-        if record is not None:
-            # RUNNING increments attempts once. Adjust for retries reported by
-            # the engine, without changing the public lifecycle API.
-            additional_attempts = max(0, result.attempts - record.attempts)
-            record.attempts += additional_attempts
+        self.lifecycle.update_running_attempts(
+            task.task_id,
+            result.attempts,
+        )
 
         terminal_state = (
             TaskState.DONE

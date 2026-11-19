@@ -1,6 +1,8 @@
 """SQLite-backed persistence for MeshWeaver task records and payloads."""
 
+import math
 import sqlite3
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -13,7 +15,7 @@ from tasks.lifecycle import TaskState
 
 
 class SQLiteTaskStore:
-    """Persist task lifecycle metadata and serialized task payloads."""
+    """Persist task lifecycle metadata, payloads, and recovery claims."""
 
     def __init__(self, db_path: str | Path) -> None:
         self.db_path = str(db_path)
@@ -53,7 +55,7 @@ class SQLiteTaskStore:
                     node TEXT NOT NULL,
                     attempts INTEGER NOT NULL CHECK (attempts >= 0)
                 )
-                """)
+            """)
 
             connection.execute("""
                 CREATE TABLE IF NOT EXISTS task_payloads (
@@ -61,7 +63,16 @@ class SQLiteTaskStore:
                         REFERENCES task_records(task_id) ON DELETE CASCADE,
                     payload BLOB NOT NULL
                 )
-                """)
+            """)
+
+            connection.execute("""
+                CREATE TABLE IF NOT EXISTS task_recovery_claims (
+                    task_id TEXT PRIMARY KEY
+                        REFERENCES task_records(task_id) ON DELETE CASCADE,
+                    owner_id TEXT NOT NULL,
+                    lease_until REAL NOT NULL
+                )
+            """)
 
     @staticmethod
     def _validate(
@@ -84,8 +95,119 @@ class SQLiteTaskStore:
         if not isinstance(node, str):
             raise TypeError("node must be a string")
 
-        if isinstance(attempts, bool) or not isinstance(attempts, int) or attempts < 0:
+        if (
+            isinstance(attempts, bool)
+            or not isinstance(attempts, int)
+            or attempts < 0
+        ):
             raise ValueError("attempts must be a non-negative integer")
+
+    @staticmethod
+    def _validate_recovery_claim(
+        task_id: str,
+        owner_id: str,
+        lease_seconds: float | None = None,
+    ) -> None:
+        """Validate recovery claim arguments."""
+        if not isinstance(task_id, str) or not task_id.strip():
+            raise ValueError("task_id must be a non-empty string")
+
+        if not isinstance(owner_id, str) or not owner_id.strip():
+            raise ValueError("owner_id must be a non-empty string")
+
+        if lease_seconds is not None and (
+            isinstance(lease_seconds, bool)
+            or not isinstance(lease_seconds, (int, float))
+            or not math.isfinite(lease_seconds)
+            or lease_seconds <= 0
+        ):
+            raise ValueError("lease_seconds must be a positive finite number")
+
+    def claim_recovery(
+        self,
+        task_id: str,
+        owner_id: str,
+        lease_seconds: float,
+    ) -> bool:
+        """Atomically claim a task for recovery.
+
+        An active claim owned by another coordinator cannot be acquired.
+        Expired claims can be acquired by a new coordinator.
+        """
+        self._validate_recovery_claim(task_id, owner_id, lease_seconds)
+
+        now = time.time()
+        lease_until = now + lease_seconds
+
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+
+            exists = connection.execute(
+                "SELECT 1 FROM task_records WHERE task_id = ?",
+                (task_id,),
+            ).fetchone()
+
+            if exists is None:
+                return False
+
+            cursor = connection.execute(
+                """
+                INSERT INTO task_recovery_claims
+                    (task_id, owner_id, lease_until)
+                VALUES (?, ?, ?)
+                ON CONFLICT(task_id) DO UPDATE SET
+                    owner_id = excluded.owner_id,
+                    lease_until = excluded.lease_until
+                WHERE task_recovery_claims.lease_until <= ?
+                """,
+                (task_id, owner_id, lease_until, now),
+            )
+
+            return cursor.rowcount == 1
+
+    def renew_recovery_claim(
+        self,
+        task_id: str,
+        owner_id: str,
+        lease_seconds: float,
+    ) -> bool:
+        """Extend a recovery claim that is still owned and unexpired."""
+        self._validate_recovery_claim(task_id, owner_id, lease_seconds)
+
+        now = time.time()
+
+        with self._connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE task_recovery_claims
+                SET lease_until = ?
+                WHERE task_id = ?
+                  AND owner_id = ?
+                  AND lease_until > ?
+                """,
+                (now + lease_seconds, task_id, owner_id, now),
+            )
+
+            return cursor.rowcount == 1
+
+    def release_recovery_claim(
+        self,
+        task_id: str,
+        owner_id: str,
+    ) -> bool:
+        """Release a recovery claim only if it belongs to this owner."""
+        self._validate_recovery_claim(task_id, owner_id)
+
+        with self._connect() as connection:
+            cursor = connection.execute(
+                """
+                DELETE FROM task_recovery_claims
+                WHERE task_id = ? AND owner_id = ?
+                """,
+                (task_id, owner_id),
+            )
+
+            return cursor.rowcount == 1
 
     def save(
         self,
@@ -113,6 +235,82 @@ class SQLiteTaskStore:
                 (task_id, name, state.value, node, attempts),
             )
 
+    def insert_record(
+        self,
+        task_id: str,
+        name: str,
+        state: TaskState,
+        node: str,
+        attempts: int,
+    ) -> None:
+        """Insert a new lifecycle record without overwriting an existing task."""
+        self._validate(task_id, name, state, node, attempts)
+
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO task_records
+                    (task_id, name, state, node, attempts)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (task_id, name, state.value, node, attempts),
+            )
+    def compare_and_set_state(
+        self,
+        task_id: str,
+        expected_state: TaskState,
+        expected_node: str,
+        expected_attempts: int,
+        new_state: TaskState,
+        new_node: str,
+        new_attempts: int,
+    ) -> bool:
+        """Update lifecycle state only when the persisted version matches.
+
+        This compare-and-set operation prevents a coordinator holding stale
+        in-memory state from overwriting a newer update made by another
+        coordinator or process.
+        """
+        if not isinstance(task_id, str) or not task_id.strip():
+            raise ValueError("task_id must be a non-empty string")
+        if not isinstance(expected_state, TaskState):
+            raise TypeError("expected_state must be a TaskState")
+        if not isinstance(new_state, TaskState):
+            raise TypeError("new_state must be a TaskState")
+        if not isinstance(expected_node, str):
+            raise TypeError("expected_node must be a string")
+        if not isinstance(new_node, str):
+            raise TypeError("new_node must be a string")
+        for value, label in (
+            (expected_attempts, "expected_attempts"),
+            (new_attempts, "new_attempts"),
+        ):
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise ValueError(f"{label} must be a non-negative integer")
+
+        with self._connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE task_records
+                SET state = ?, node = ?, attempts = ?
+                WHERE task_id = ?
+                  AND state = ?
+                  AND node = ?
+                  AND attempts = ?
+                """,
+                (
+                    new_state.value,
+                    new_node,
+                    new_attempts,
+                    task_id,
+                    expected_state.value,
+                    expected_node,
+                    expected_attempts,
+                ),
+            )
+
+        return cursor.rowcount == 1
+
     def save_task(self, task: Task) -> None:
         """Persist a new task without allowing duplicate IDs to overwrite it."""
         if not isinstance(task, Task):
@@ -130,8 +328,6 @@ class SQLiteTaskStore:
         )
 
         with self._connect() as connection:
-            # A task ID is unique across both metadata and payload.
-            # Do not silently attach or replace a payload for an existing ID.
             connection.execute(
                 """
                 INSERT INTO task_records
@@ -216,21 +412,24 @@ class SQLiteTaskStore:
                 SELECT task_id, name, state, node, attempts
                 FROM task_records
                 ORDER BY task_id
-                """).fetchall()
+            """).fetchall()
 
         return [dict(row) for row in rows]
 
     def list_task_payloads(self) -> list[Task]:
-        """Restore all task payloads from trusted local storage."""
+        """Restore all task payloads from trusted local database contents."""
         with self._connect() as connection:
             rows = connection.execute("""
                 SELECT p.task_id, p.payload
                 FROM task_payloads AS p
                 JOIN task_records AS r ON r.task_id = p.task_id
                 ORDER BY p.task_id
-                """).fetchall()
+            """).fetchall()
 
-        return [self._deserialize_task(row["payload"], row["task_id"]) for row in rows]
+        return [
+            self._deserialize_task(row["payload"], row["task_id"])
+            for row in rows
+        ]
 
     def delete_task_payload(self, task_id: str) -> None:
         """Delete a task payload without deleting its lifecycle record."""
@@ -241,7 +440,7 @@ class SQLiteTaskStore:
             )
 
     def delete_task_record(self, task_id: str) -> None:
-        """Delete lifecycle metadata and cascade-delete its payload."""
+        """Delete lifecycle metadata and cascade-delete its payload and claim."""
         with self._connect() as connection:
             connection.execute(
                 "DELETE FROM task_records WHERE task_id = ?",

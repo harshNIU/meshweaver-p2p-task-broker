@@ -1,79 +1,130 @@
-﻿# MeshWeaver Mid-Review — Member 4
+﻿# MeshWeaver — Member 4 Final Review
 
 ## Role
-
 Task Serializer & Execution Lead
 
 ## Objective
-
-Implement and validate task serialization, execution models, function
-serialization for trusted Python callables, and task execution behavior
-within the existing MeshWeaver team architecture.
+Implement task serialization, trusted callable serialization, remote task execution, lifecycle management, structured results, retry handling, and recovery integration.
 
 ## Implemented Components
 
 | Component | Responsibility |
 |---|---|
-| `execution/models.py` | Defines `Task`, `TaskResult`, and `TaskStatus`. |
-| `execution/serializer.py` | Serializes registered-task envelopes to JSON and validates incoming task data. |
-| `execution/function_serializer.py` | Serializes and deserializes trusted Python callables using cloudpickle. |
-| `execution/engine.py` | Registers task functions and executes tasks with retries, timeouts, cancellation requests, and result tracking. |
-| `net/` | Contains the team's networking and peer communication modules. |
-| `tests/test_function_serializer.py` | Tests regular functions, lambdas, closures, and invalid inputs. |
-| `tests/test_execution_engine.py` | Tests execution-engine behavior. |
-| `tests/test_execution_models.py` | Tests task models and related behavior. |
+| `execution/models.py` | Task and task-result models |
+| `execution/serializer.py` | JSON task serialization and validation |
+| `execution/function_serializer.py` | Cloudpickle callable and result serialization |
+| `execution/engine.py` | Task registration, execution, retries, and result tracking |
+| `tasks/lifecycle.py` | Task lifecycle transitions and persistence |
+| `tasks/store.py` | SQLite task storage and state persistence |
+| `tasks/recovery.py` | Interrupted-task recovery and reassignment |
+| `tasks/execution_adapter.py` | Integration between task lifecycle and execution |
+| `net/tcp_node.py` | Authenticated remote callable execution over TCP |
+| `security/message_signing.py` | HMAC-SHA256 message authentication |
+| `security/tls.py` | TLS client and server configuration |
 
 ## Task Execution Flow
 
-1. Define a task using its registered task name, arguments, and keyword arguments.
-2. Serialize the task envelope as JSON when task transfer is required.
-3. Register the corresponding callable with `ExecutionEngine`.
-4. Execute the task through the engine.
-5. Track the task status and execution attempts.
-6. Return a structured `TaskResult` containing the status and result or error information.
-
-Function serialization is a separate capability. It supports transferring trusted Python callable objects, but it is not a replacement for the registered-task JSON envelope.
+1. A task is created with its ID, function or registered task name, arguments, and keyword arguments.
+2. Task data is serialized.
+3. Authenticated messages are transmitted to the receiving node.
+4. The receiver verifies message authentication before callable deserialization.
+5. The execution engine executes the task.
+6. The result is serialized and returned as a structured task result.
+7. Task state and execution attempts are tracked.
 
 ## Task Lifecycle
 
-The defined task statuses are:
+The distributed lifecycle supports:
 
-- `PENDING`
-- `RUNNING`
-- `COMPLETED`
-- `FAILED`
-- `CANCELLED`
+PENDING -> ASSIGNED -> RUNNING -> DONE / FAILED
 
-The engine updates status as execution proceeds. It does not define a separate `RETRYING` status.
+The local execution engine also supports COMPLETED and CANCELLED states.
+
+## Reliability Features
+
+- Task-ID deduplication.
+- Retry limits and attempt counting.
+- Persistent task records.
+- Interrupted-task recovery.
+- Recovery claims to reduce concurrent duplicate recovery.
+- Task reassignment and replacement-worker execution.
+- Structured success and failure results.
+- Graceful execution-engine shutdown.
+
+The recovery design provides at-least-once execution semantics. Exactly-once execution is not guaranteed.
+
+## Security Features
+
+- HMAC-SHA256 message authentication.
+- Authentication verification before cloudpickle deserialization.
+- TLS support for TCP communication.
+- Configurable message-size limits.
+- Rejection of invalid or unauthenticated task messages.
+
+Cloudpickle must only deserialize authenticated, trusted payloads. Authentication does not make arbitrary untrusted Python code safe.
+
+## Demonstration
+
+Run:
+
+`python examples/member4_demo.py`
+
+The mathematical demonstration calculates:
+
+`(12 * 8) + (5 ** 2) = 121`
+
+The demonstration exercises authenticated TCP callable submission, remote execution, structured result return, and graceful shutdown.
 
 ## Verification Evidence
 
-Latest focused validation:
+### Previously completed full-suite validation
 
-- `python -m pytest -q tests/test_execution_engine.py tests/test_execution_models.py tests/test_function_serializer.py`: 48 passed.
-- Ruff checks for the function serializer and its tests: passed.
-- Black checks for the function serializer and its tests: passed.
+- `python -m pytest -q`: 375 passed.
+- `python -m ruff check .`: all checks passed.
+- `git diff --check`: no whitespace errors.
+- `python examples/member4_demo.py`: DEMO PASSED.
 
-The latest full test run reported 142 passed, 2 failed, and 18 subtests passed. The two failures were in DHT networking tests:
+These full-suite results were recorded before the latest bootstrap changes and must be rerun for final sign-off.
 
-- `tests/test_dht.py::DHTNetwork::test_refresh_evicts_dead_peer_and_rejoin`
-- `tests/test_dht.py::DHTNetwork::test_ten_nodes_one_seed_and_remote_store`
+### Latest bootstrap validation
 
-These failures remain unresolved and must not be reported as passing.
+- `python -m pytest -q tests/test_bootstrap.py tests/test_bootstrap_integration.py`: 9 passed.
 
-## Security and Reliability Limitations
+### Manual execution validation
 
-- `cloudpickle` deserialization must only be performed on trusted payloads.
-- Function serialization does not itself provide authentication, authorization, or encrypted transport.
-- A synchronous function that times out may continue running in its daemon thread.
-- Retrying operations can repeat side effects.
-- Cancellation is cooperative; a task must check its supplied cancellation event to stop promptly.
-- The complete distributed system and its security properties are not established by the focused tests.
+- Node 1: `add(7, 8)` returned 15.
+- Node 2: `multiply(5, 6)` returned 30.
+- Node 2 successfully registered with Node 1 through seed discovery.
+- Authenticated TCP callable demonstration returned 121.
 
-## Remaining Work
+### Remaining integration limitation
 
-1. Compare lifecycle requirements against the project handbook.
-2. Continue testing serialization and execution edge cases.
-3. Investigate the two DHT test failures with the responsible team member.
-4. Verify integration with the team's networking components.
-5. Review the final changes and commit only the intended files on the assigned branch.
+Seed discovery now accepts a valid PONG without requiring a PEER_LIST response. The regression tests pass.
+
+However, a live CLI task submission through `--seed` received PONG and PEER_LIST but timed out waiting for TASK_RESULT. Seed-based task execution therefore remains unverified.
+
+Direct submissions to both nodes were successful.
+
+## Final Assessment
+
+Member 4's core serialization, execution, lifecycle, persistence, security, and recovery components have been implemented and tested.
+
+The remaining seed-based task-result issue should be investigated with the networking and routing integration. It must not be reported as a successful end-to-end test.
+
+## Final Checklist
+
+- [x] Task and result serialization
+- [x] Callable serialization
+- [x] Remote TCP execution
+- [x] HMAC authentication
+- [x] TLS support
+- [x] Task lifecycle and persistence
+- [x] Retry and attempt tracking
+- [x] Task-ID deduplication
+- [x] Recovery and reassignment
+- [x] Structured task results
+- [x] Mathematical demonstration
+- [x] Bootstrap regression test
+- [ ] Final full-suite rerun after latest changes
+- [ ] Verify seed-based CLI task execution
+- [ ] Final Git ownership review
