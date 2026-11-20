@@ -1,4 +1,4 @@
-# MeshWeaver — P2P Task Broker
+﻿# MeshWeaver — P2P Task Broker
 
 MeshWeaver is a collaborative Python project exploring peer-to-peer communication, distributed task execution, node discovery, routing, and fault-tolerant coordination.
 
@@ -110,43 +110,17 @@ The dashboard provides a live view of the running network and its available runt
 
 Observed-node counts can temporarily include client nodes created during task submission. They should not automatically be interpreted as the number of long-running worker processes.
 
-### 3. Submit an addition task
+### 3. Submit a task
 
-Open a **second PowerShell terminal** in the project directory and activate the virtual environment if necessary.
+The CLI task-submission workflow currently has a known authentication issue.
+Incoming task requests require an HMAC signature, but the current CLI submit
+command sends the request without signing it. As a result, the receiving node
+rejects the request and the client may time out.
 
-Run:
+The addition and multiplication submission commands are therefore documented
+for reference but should not be considered verified until this issue is fixed.
 
-```powershell
-python -m cli.main submit add --args "[2,3]" --host 127.0.0.1 --port 8000 --timeout 10
-```
-
-Expected successful result:
-
-```text
-Submitted task 'add'
-Received TASK_RESULT from node-8000
-Status: completed
-Result: 5
-```
-
-### 4. Submit a multiplication task
-
-```powershell
-python -m cli.main submit multiply --args "[4,5]" --host 127.0.0.1 --port 8000 --timeout 10
-```
-
-Expected successful result:
-
-```text
-Submitted task 'multiply'
-Received TASK_RESULT from node-8000
-Status: completed
-Result: 20
-```
-
-The commands and results above were verified during local development.
-
-### 5. Stop the nodes
+### 4. Stop the nodes
 
 Return to the terminal running `start_four_nodes.ps1` and press:
 
@@ -164,7 +138,7 @@ With the virtual environment activated, run the project's test suite:
 python -m unittest discover -s tests -v
 ```
 
-**Recorded validation result:** 89 tests ran successfully, with `OK`.
+**Fresh-clone validation result:** 156 tests ran; 152 passed, 3 failed, and 1 errored. The failures were in TCP recovery integration tests, and the error involved missing `MESHWEAVER_SHARED_SECRET` configuration.
 
 The test suite covers networking, PING/PONG exchange, peer discovery, timeout handling, malformed messages, task-result handling, and other repository components.
 
