@@ -1,4 +1,3 @@
-
 $ErrorActionPreference = "Stop"
 
 $python = Join-Path $PSScriptRoot ".venv\Scripts\python.exe"
@@ -31,11 +30,11 @@ try {
             -FilePath $python `
             -ArgumentList $arguments `
             -WorkingDirectory $PSScriptRoot `
-            -WindowStyle Hidden `
+            -WindowStyle Normal `
             -PassThru
 
         $processes += $process
-        Start-Sleep -Seconds 2
+        Start-Sleep -Seconds 3
 
         $process.Refresh()
 
@@ -48,7 +47,7 @@ try {
     Write-Host "All four nodes started." -ForegroundColor Green
     Write-Host "Dashboard: http://127.0.0.1:8765/"
     Write-Host "Demo tasks: add, multiply"
-    Write-Host "Press Ctrl+C to stop the nodes."
+    Write-Host "Keep this window open to keep the nodes running."
 
     while ($true) {
         $running = @(
@@ -72,12 +71,10 @@ finally {
             if (-not $process.HasExited) {
                 Stop-Process -Id $process.Id -Force `
                     -ErrorAction SilentlyContinue
-
-                Write-Host "Stopped process $($process.Id)"
             }
         }
         catch {
-            # The process may already have exited.
+            # Process may already have exited.
         }
     }
 
