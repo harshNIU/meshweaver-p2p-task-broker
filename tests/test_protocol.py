@@ -59,6 +59,7 @@ def test_merge_empty_incoming_list():
 
     assert result == current
 
+
 def test_merge_does_not_add_older_information():
     current = {
         "node-1": make_node("node-1", last_seen=200.0),
