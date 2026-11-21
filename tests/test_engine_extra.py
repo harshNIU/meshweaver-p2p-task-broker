@@ -1,5 +1,3 @@
-import asyncio
-import pytest
 
 from gossip.engine import GossipEngine
 from gossip.state import NodeInfo
