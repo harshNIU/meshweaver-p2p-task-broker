@@ -301,5 +301,3 @@ I also gained experience debugging issues and verifying that different modules w
 ## 23. How would you conclude your project presentation?
 
 MeshWeaver demonstrates how tasks can be distributed among multiple peer nodes. As M5, I contributed to the CLI, dashboard, integration testing, quality assurance, and documentation. This project helped me understand practical software development and teamwork.
-
-

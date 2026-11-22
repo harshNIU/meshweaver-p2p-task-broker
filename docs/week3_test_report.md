@@ -1,7 +1,7 @@
 # Week 3 Test Report
 
-**Date:** 7 November 2026  
-**Tested branch:** main  
+**Date:** 7 November 2026
+**Tested branch:** main
 **Tested commit:** `eeabf2f`
 
 ## 1. Full Test Suite

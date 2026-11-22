@@ -1,6 +1,6 @@
 $ErrorActionPreference = "Stop"
 
-$python = Join-Path $PSScriptRoot ".venv\Scripts\python.exe"
+$python = (Get-Command python).Source
 $ports = @(8000, 8001, 8002, 8003)
 $processes = @()
 
@@ -30,7 +30,7 @@ try {
             -FilePath $python `
             -ArgumentList $arguments `
             -WorkingDirectory $PSScriptRoot `
-            -WindowStyle Normal `
+            -NoNewWindow `
             -PassThru
 
         $processes += $process
