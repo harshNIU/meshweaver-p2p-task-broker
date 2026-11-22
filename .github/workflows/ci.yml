@@ -24,6 +24,9 @@ jobs:
       - name: Run tests
         run: python -m pytest
 
+      - name: Run web dashboard tests
+        run: python -m pytest tests/test_web.py -q
+
       - name: Check formatting with Black
         run: python -m black --check cli tests dht tasks scripts web
 
